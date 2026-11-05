@@ -1,0 +1,15 @@
+{
+  "name": "@taskwatch/shared",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pure TaskWatch rules shared by server and client (ADR-0007). No dependencies, no build step.",
+  "type": "module",
+  "exports": {
+    "./levels": "./levels.ts",
+    "./workflow": "./workflow.ts",
+    "./permissions": "./permissions.ts",
+    "./settings": "./settings.ts",
+    "./notifications": "./notifications.ts",
+    "./recurrence": "./recurrence.ts"
+  }
+}

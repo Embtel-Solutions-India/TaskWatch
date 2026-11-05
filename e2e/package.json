@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Browser end-to-end tests (Playwright); ES modules like server/ and client/."
+}

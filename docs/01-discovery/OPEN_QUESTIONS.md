@@ -1,0 +1,222 @@
+# Decision Register (formerly Open Questions)
+
+> **Status 2026-11-04:** every D-number below is **decided**. §7.1 holds explicit owner decisions; §7 and §8 hold defaults the owner accepted ("accept defaults", §9). Still open: only WO-D2…D7 (§8.8, Founder's Office). R-1…R-3 and T-1.1 were decided on 2026-11-04 (§10.1). In other docs, `[D-n, decided]` points here. New questions get new D-numbers in a new section.
+
+> D-numbers are stable IDs referenced across all docs. Accepted decisions with lasting technical impact are also recorded as ADRs in [../03-architecture/decisions/](../03-architecture/decisions/README.md). Work-order decisions D1–D7 (Founder's Office) are written **WO-D1…WO-D7** to avoid clashing.
+
+## 7. Open decisions (need your answer before Phase 3)
+
+| # | Decision | Options | Decided (recommendation accepted 2026-11-04 unless §7.1 says otherwise) |
+|---|---|---|---|
+| **D-1** | Backend strategy | (a) Evolve the existing Express/pg server with new migrations to the client's model. (b) New server from scratch. | **(a).** It keeps the tested engine, dispatcher, hash chain and sessions. |
+| **D-2** | Sign-in method | (a) Google Workspace only, as the work order and README specify: the login form becomes a "Sign in with Google" button, and the password/reset pages go away. (b) Email + password, as the UI shows, hashed with Node's built-in `crypto.scrypt` (no new dependency). (c) Both. | **(a)** if the work order still stands. It is UI-visible, so it needs your approval. |
+| **D-3** | Blocked state | (a) Add `blocked` (with a reason, alerting the lead) to the client model, as FR-2 requires. (b) Drop Blocked and accept the deviation from the work order. | **(a).** It needs a small UI addition. |
+| **D-4** | Org units | (a) Use departments → teams as in the UI, and map the 6 work-order entities to departments. (b) Keep entities. | **(a)** |
+| **D-5** | Time zones for due dates and recurrence | Use the person's home time zone, converted on the server (work order), vs browser/UTC (prototype). | Use the server and the person's time zone. |
+| **D-6** | Due-date changes | (a) The client's extension request/approval flow. (b) The work order's FR-5 direct change (lead once / manager / CoS). (c) Both: overseers change it directly and assignees request. | Your call. This is a business rule. |
+| **D-7** | Per-entity escalation overrides | Keep them (needs UI) / drop them. | Drop for now (the UI doesn't have them). |
+| **D-8** | Roles per user | Single role (UI) vs several (server). | Single role, plus the permission matrix. |
+| **D-9** | Shared engine code | Move the ladder, state machine and permission rules into one shared TypeScript module used by both client and server. | Yes. It is the only way to satisfy "never repeat code". |
+| **D-10** | Pagination | (a) Keep client-side filter, sort and page over scoped lists (fine up to roughly 5k rows). (b) Server-side pagination now. | (a) for v1, with a hard server cap, and revisit. |
+| D-11 | Sensitive-ID guard in the new UI | Keep it on the server and show the 422 message. | Keep it. |
+| D-12 | Comment edit and delete vs immutability | Keep the original text in the activity log. | Yes. |
+| D-13 | Max upload size | 15 MiB (server) or 25 MB (UI). | Pick one. |
+| D-14 | Digest schedule | Comes from settings (UI) or Monday 09:00 IST (server/work order). | From settings, defaulting to Monday 09:00 IST. |
+| D-15 | PDF export | The work order requires it; the new UI lacks it. | Add a PDF button that calls the existing server PDF service. |
+| D-16 | Manual chain-check button | Add one to the Audit page? | Yes, small. |
+| D-17 | Demo tools | Keep the clock for development only; drop scenarios and reset data? | Clock for dev only, CoS only. |
+| D-18 | Existing dev database | Migrating to the new model will **reshape or replace data** in the `taskwatch` database. Running `npm test` **drops the schema of `taskwatch_test`**. | Needs your explicit OK. |
+| D-19 | Old-client artifacts | `README.md`'s Layout section still describes `client/src/pages/` (deleted). | Update the README when integration starts. |
+
+---
+
+### 7.1 Decision status (supersedes the recommendations above where they differ)
+
+**Decided by the product owner (2026-11-03)**
+| # | Decision |
+|---|---|
+| D-1 | **Evolve the existing server.** Reshaping dev DB data still needs a separate OK (D-18). |
+| D-2 | **Google Workspace and email + password.** Passwords use Node `crypto.scrypt`; reset tokens come from `crypto.randomBytes`; sign-in and reset are rate-limited. The dev directory login is non-production only. |
+| D-3 | **Add Blocked to the UI** (WF-11). |
+| D-6 | **Both.** Assignees request extensions and overseers approve them. Overseers can also change the date directly within FR-5: a lead once, then a manager, then the CoS. Old date, new date and reason are logged. |
+
+| D-20 | **WO core plus the prototype's extras.** FR-2's states are the core: `assigned` is shown as Open, `in_progress`, `blocked` (new), and `completed` is shown as Done. Draft, the review loop (submitted / changes_requested), reopened and cancelled stay as optional extras. No UI feature is removed. |
+| D-4 | **Department = Entity.** "Department" is relabelled "Entity" (the 6 WO entities), with teams underneath. A task's entity comes from its team, or else from the assignee. Per-entity SLA overrides attach to entities. |
+| D-21 | **TOTP 2FA** (RFC 6238, Node `crypto`, no new dependency) is required at password sign-in for anyone holding the Manager, CoS or CEO role. This adds an enrolment screen and a code step to the UI. Google sign-in relies on Workspace 2-Step Verification. |
+| D-22 | **Standalone** app with its own directory and sign-in, per WO D1. |
+
+**Resolved by the work order (WO wins)**
+| # | Resolution |
+|---|---|
+| D-7 | **Keep per-entity SLA overrides.** The Policies page needs an entity selector (UI addition). |
+| D-8 | **Multiple roles per user.** Permissions are the union. This reverses the earlier recommendation. |
+| D-11 | Sensitive-ID guard on the server, with its 422 shown in the UI. |
+| D-12 | Soft delete only; originals kept in the append-only log. |
+| D-14 | Digest is Monday 09:00 IST. |
+| D-15 | PDF export is required. |
+
+**Still open**
+| # | Question |
+|---|---|
+| D-5 | Due-time entry in the person's home time zone (the WO implies it; confirm). |
+| D-9 | One shared engine/rules module for client and server. |
+| D-10 | Pagination. |
+| D-13 | Upload size limit. |
+| D-16 | Manual chain-check button. |
+| D-17 | Demo tools. |
+| D-18 | Dev and test DB data changes. |
+| D-19 | README update. |
+
+
+## 8. Questions raised while writing the documentation (2026-11-03)
+
+D-numbers were assigned in separate ranges by the document authors, and the numbers are kept as they are so that references in the FRDs and architecture docs stay valid:
+
+| Range | Raised by |
+|---|---|
+| D-23…D-35 | Core and task FRDs |
+| D-40…D-53 | Module FRDs |
+| D-60…D-75 | Architecture docs |
+| D-80…D-93 | Standards and QA docs |
+
+**Duplicates point to a canonical number.** "Default" is the proposal that will be used if no answer is given. It is **not** a decision. "Blocks" names the roadmap phase that cannot finish without an answer ([IMPLEMENTATION_ROADMAP](../06-planning-and-tracking/IMPLEMENTATION_ROADMAP.md)).
+
+### 8.1 Workflow and escalation rules
+| # | Question | Duplicates | **Decided 2026-11-04** (was: default) | Phase |
+|---|---|---|---|---|
+| D-23 | The Blocked alert to the lead can fall in quiet hours, but AC-3 requires the alert "within 5 minutes". Is an in-app alert alone enough at night? | D-71, D-85 | In-app goes out immediately; email and WhatsApp follow quiet hours, as for L1 | Escalation |
+| D-24 | Does marking a task Blocked raise its level to L1? The WO ladder lists "marked Blocked" under L1. | D-91 | Yes: Blocked puts the task at L1 or higher while it stays blocked | Escalation |
+| D-25 | Does the past-due floor still apply while a task is In review (`submitted`)? | — | Yes (WO: it applies until the task is closed or extended) | Escalation |
+| D-26 | Who may acknowledge an escalation: to only, to + cc, or overseers? Does one acknowledgement cover one level or all of them? | D-84 | Recipients at that level (to + cc); the acknowledgement covers that level only (WO) | Escalation |
+| D-27 | Does a lead approving an extension use up their one FR-5 change? | D-72 | Yes | Task core |
+| D-83 | TASK-03 lets the giver change the due date freely through Edit. Should that be limited by the FR-5 rules (EXT-04)? | — | Yes: due-date edits go through the EXT-04 rules | Task core |
+| D-28 | When L1 or L2 falls through to the Founder's Office, is the CEO included? | — | Same as L3 (included when D7 is on) | Escalation |
+| D-29 | May team leads reassign by default? The WO gives that only to Manager and CoS. | — | No (WO wins): remove `reassign_tasks` from the lead default | Org/permissions |
+| D-30 | After a reassignment, do escalations re-fire to the new assignee's chain? | — | Yes (current server behaviour) | Task core |
+| D-32 | Lead assignment scope: direct reports only, or transitive? May a lead assign a task to themselves? | — | Transitive, and self-assignment allowed (WO: "their own") | Task core |
+| D-45 | Recurrence: should missed occurrences be backfilled? How are month days 29–31 handled? | — | No backfill; days 29–31 clamp to the last day of the month | Recurring |
+| D-46 | Recurrence when the schedule owner has lost scope or the assignee is inactive | — | Skip the occurrence and log it to the audit trail | Recurring |
+| D-48 | What is the canonical set of policy fields, their limits, the repeat cadence, and which fields can differ per entity? | — | The union of both fields lists; windows up to 720 h; repeat every `repeatAfterWindows` × window (default 1); per entity: windows and multiples only (WO) | Escalation |
+
+### 8.2 Roles, visibility and privacy
+| # | Question | Duplicates | **Decided 2026-11-04** (was: default) | Phase |
+|---|---|---|---|---|
+| D-33 | Does the CEO see every task and person org-wide (WO)? Is the CEO strictly read-only, or may they comment, acknowledge and attach files? | D-40, D-70 | Sees everything; read-only except commenting and acknowledging | Org/permissions |
+| D-51 | Does team scope in dashboards and reports include the viewer's own tasks and the tasks they assigned? | — | Yes (server behaviour; WO: "work they own, assigned, or supervise") | Dashboards |
+| D-52 | Who may see other people's delivery rows and contact details? | — | CoS only; everyone else sees only their own | Notifications |
+| D-74 | May the assignee comment on their own task? | — | Yes (commenting does not reset the clock) | Task core |
+| D-75 | What is the WhatsApp opt-in default for new users? | — | Off | Org/permissions |
+| D-67 | How are teams, team leads and entity heads created, and which team does each existing user join? | — | The CoS manages teams in Org; the migration assigns existing users to teams (needs D-18) | Org/permissions |
+
+### 8.3 API conventions
+| # | Question | Duplicates | **Decided 2026-11-04** (was: default) | Phase |
+|---|---|---|---|---|
+| D-35 | A resource exists but the user can't see it: return 403 or 404? | D-60, D-81 | 404, so existence doesn't leak. Changes the assertion at `api.test.ts:166`. | Foundation |
+| D-80 | Validation errors: 400 (what the server does today, asserted at `api.test.ts:287`), or 422 with `fields` (the UI contract)? | — | 422 with `fields`. The test assertion would change, which needs approval. | Foundation |
+| D-82 | Should rate limiting return 429 with `Retry-After`? | — | Yes | Foundation |
+| D-34 | What are the canonical text limits? Title is 4–140 in the client and 3–200 on the server; comments are 4000 vs 5000; instructions differ too. | D-92 | Client limits for title and comments (the UI shows them); instructions up to 5000 | Task core |
+
+### 8.4 Auth and security
+| # | Question | Duplicates | **Decided 2026-11-04** (was: default) | Phase |
+|---|---|---|---|---|
+| D-89 | How is 2FA evidenced for Manager, CoS and CEO users who sign in with Google? | D-64 | A written attestation that Workspace enforces 2-Step Verification, recorded in RELEASE_READINESS | Release |
+| D-65 | If someone loses their authenticator, who resets their TOTP? Are recovery codes issued? | — | The CoS resets it (audited); 10 one-time recovery codes | Auth |
+| D-68 | What is the absolute session lifetime? | — | 12 h | Auth |
+| D-69 | Which attachment file types are allowed (together with D-13, the size limit)? | — | Office documents, PDF, images, txt and csv; 15 MiB | Task core |
+| D-73 | Which secrets store does production use? `npm start` also loads `../.env`; should it stop? | D-87 | The secrets store injects the environment; production start stops loading `../.env` | Release |
+| D-66 | What happens after 7 years: keep, archive or purge? | — | Keep, until a separate policy decision is made | Release |
+
+### 8.5 Notifications, settings and reports
+| # | Question | Duplicates | **Decided 2026-11-04** (was: default) | Phase |
+|---|---|---|---|---|
+| D-41 | The Settings page has email and WhatsApp simulation toggles, but the WO says email always goes out. Keep the toggles? | D-61 | Remove them from production; show a read-only Live/Simulated status derived from whether credentials are set | Notifications |
+| D-42 | Is the Blocked notification mandatory, so users can't switch it off? | — | Yes | Notifications |
+| D-43 | Should the in-app, email and WhatsApp preferences be independent for each notification type? | — | Yes | Notifications |
+| D-44 | Settings has editable `digestDay`/`digestHour`, but the WO fixes the digest at Monday 09:00 IST. Which wins? | D-62 | Keep the fields as an override, interpreted in IST | Notifications |
+| D-93 | May managers send the digest to themselves manually? | — | Yes, as a preview to themselves only | Notifications |
+| D-49 | FR-11 stages: is amber L0–L1 and red L2–L3? | — | Yes (server behaviour) | Reports |
+| D-50 | Is "on time" measured against the original due date or the latest one? | — | The latest approved due date, with the original shown alongside | Reports |
+| D-53 | Does PDF export cover all nine reports, or only the FR-11 accountability report? | — | FR-11 only (WO) | Reports |
+| D-47 | Are demo tools off by default in development? | — | Off unless `DEMO_TOOLS=true` | Demo |
+
+### 8.6 Closed without needing a decision
+| # | Outcome |
+|---|---|
+| D-86 | The first-draft tracker said "single role". That tracker is superseded by [06-planning-and-tracking](../06-planning-and-tracking/IMPLEMENTATION_TRACKER.md). |
+| D-88 | The README claims `npm run dev` also starts the API. Folded into D-19 (README refresh). |
+| D-90 | Wrong line reference for C-3. Corrected to `client/src/hooks/index.ts:37`. |
+| (fact) | The server **applies migrations automatically on start** (`server/src/index.ts:9`), so `dev:server` and `start` also count as DB-writing commands under D-18. |
+
+### 8.7 Added during validation (2026-11-04)
+| # | Question | **Decided 2026-11-04** (was: default) | Phase |
+|---|---|---|---|
+| D-31 | Soft-delete recurring schedules and attachments? The client hard-deletes both (`admin.ts:398`, `tasks.ts:481`), which conflicts with D-12. | Soft delete, with the original kept in the log | Task core, Recurring |
+| D-63 | Does the assigner pick the entity on the task form (WO FR-1 lists entity), or is it always derived (D-4)? | Derived from team or assignee. Shown read-only on the form. | Task core |
+| D-24 | **Resolved by the WO.** The ladder graphic on WO p.2 defines L1 as "Silent 1.5x, past due, **or marked Blocked**". The server does not implement this yet. | n/a | — |
+
+### 8.8 Work-order decisions for the Founder's Office (WO p.7, "confirm before WP-1")
+These belong to the Founder's Office, not the product owner. The defaults are the values the WO proposes.
+
+| # | Decision | WO default | Status |
+|---|---|---|---|
+| WO-D1 | Delivery | StatCommand module | Answered **standalone** (D-22). Confirm with the Founder's Office. |
+| WO-D2 | SLA windows | 4 h / 24 h / 48 h / 72 h (Critical / High / Normal / Low) | Not confirmed |
+| WO-D3 | Ladder | 1× / 1.5× / 2× / 3×; past-due offsets 0 / +24 h / +72 h | Not confirmed |
+| WO-D4 | Quiet hours | Hold L0 and L1 alerts 21:00–08:00 local time | Not confirmed |
+| WO-D5 | Pilot entity | BAIS | Not confirmed |
+| WO-D6 | WhatsApp sender number and Meta Business account owner | — | **Not needed: WhatsApp dropped (D-106, 2026-11-05)** |
+| WO-D7 | L3 alerts also go to the CEO | Yes | Not confirmed (built as a setting, `l3NotifyCeo`) |
+
+## 9. Decision record: 2026-11-04 (product owner)
+- **"Accept defaults."** Every question still open in §7 (D-5, D-9, D-10, D-13, D-16, D-17, D-19) and §8 (§8.1–§8.5, §8.7) is **decided as its stated default**. For D-13 (upload size) the default is the 15 MiB in D-69.
+  - Consequence: ADR-0007 (shared rules module) and ADR-0009 (client-side pagination v1) move to Accepted.
+- **D-18 approved.** Migrations and `npm test` may run against the local `taskwatch` and `taskwatch_test` databases. This includes `npm test` dropping the `taskwatch_test` schema, and server start auto-migrating.
+- **Not covered by this record:**
+  - **WO-D2…D7 (§8.8).** These belong to the Founder's Office. The WO defaults are built in as configurable values, pending confirmation.
+  - ~~Removal of the superseded `docs/FRD.md` and `docs/IMPLEMENTATION_TRACKER.md`.~~ Closed 2026-11-06: both files are already gone.
+
+## 10. Raised by the readiness review (2026-11-04): open
+
+Details and recommendations: [READINESS_REVIEW §5](../06-planning-and-tracking/READINESS_REVIEW.md).
+
+| # | Question | Recommendation | Blocks |
+|---|---|---|---|
+| R-1 | Re-decide D-26. The accepted default "to + cc" lets the cc'd assignee acknowledge their own L1 escalation. | "To" recipients of that level, plus CoS. The acknowledgement covers that level only. | Escalation |
+| R-2 | Can a task go to Done directly from Open or Blocked when no review is required? | Yes (WO: "mark Done"; the server already allows it) | Task core |
+| R-3 | Approve Playwright (e2e), Node's built-in coverage flag, and a load tool | Playwright: yes. Coverage: yes. Load tool: defer. | Any feature reaching DONE |
+
+### 10.1 Decision record: 2026-11-04 (product owner: "accept all four")
+| # | Decided |
+|---|---|
+| R-1 | **D-26 is replaced.** An escalation may be acknowledged only by the **"to" recipients of that level, plus any CoS**. cc'd people, including the assignee, may not. The acknowledgement covers that level only. |
+| R-2 | **Done is allowed directly from Open (`assigned`), In progress and Blocked** when no review is required. When review is required, the review loop still applies. |
+| R-3 | **Playwright approved** for e2e tests (new dev dependency). Node's built-in coverage flag approved. Load tool deferred; a `fetch` script is enough at pilot volume. |
+| T-1.1 | **Approved as written:** DATABASE_DESIGN (including `admin_log` chaining), API_CONTRACTS §2, and the proposals in SECURITY_ARCHITECTURE, INTEGRATION_DESIGN and SCALABILITY_AND_RELIABILITY. |
+
+Open now: only WO-D2…D7 (Founder's Office).
+
+## 11. Decision record: 2026-11-04 (product owner)
+| # | Decided | Supersedes |
+|---|---|---|
+| D-94 | **Remove 2FA entirely.** TOTP enrolment, the code step, recovery codes and the CoS 2FA reset are removed. Everyone may sign in with a password, with no second factor on that path. **This deviates from the work order** ("two-factor authentication required for Manager, Chief of Staff and CEO roles"). Google sign-in still gets Workspace 2-Step Verification wherever the Workspace admin enforces it. | D-21, D-65 (the 2FA parts), R-1 is unaffected |
+| D-95 | **Multiple organizations: shared database with `organization_id`.** Every organization-owned record carries it, and every query is scoped to the caller's organization on the server. | — |
+| D-96 | **One organization per user.** Email is unique across the platform, and sign-in finds the organization from the account. There is no organization picker. | — |
+| D-97 | **Organization above entities.** An organization holds its own entities and teams, and has its own Chief of Staff, settings, role matrix, escalation rules and audit log. The work order's six entities become one organization's entities. | refines D-4 |
+
+## 12. Raised by the auth security review (2026-11-04): open
+| # | Question | Proposed default |
+|---|---|---|
+| D-98 | Should reset-access (`POST /people/:id/reset-access`) be limited to the actor's reporting line? Today anyone holding `manage_staff` can end the sessions of anyone except a CoS, including the CEO. Only the CoS holds it by default, but ROLE-02 can grant it to others. | Yes: a non-CoS holder may reset only people below them in the reporting line. Decide in Org/permissions (T-3.x). |
+| D-99 | **Decided 2026-11-05: the proposed default (built in T-3.4).** A CoS can change anyone's email (`PUT /people/:id`), then use forgot password or Google at the new address to take over the account, including the CEO's. The change is audited. Should an email change end the person's sessions and notify the old address, or need the CEO for CEO accounts? | End sessions and notify the old address on any email change. |
+| D-100 | Who creates organizations in v1? (ADR-0010) | **Decided 2026-11-04: a UI** (platform-admin page, T-3.9). Platform admins listed in env `PLATFORM_ADMIN_EMAILS` [A, to confirm]. |
+| D-101 | Google domains per organization? (ADR-0010) | **Decided 2026-11-04:** `organizations.google_domains`, with `GOOGLE_ALLOWED_DOMAINS` as the fallback. |
+| D-102 | Entity codes across organizations? (ADR-0010) | **Decided 2026-11-04:** globally unique codes. |
+| D-103 | `organization_id` on every table (D-95's wording) or only on root tables? (ADR-0010) | **Decided 2026-11-04:** root tables only, with composite foreign keys. |
+| D-104 | Name of organization 1 (the work order's six entities). | **Decided 2026-11-04: "Vertical".** |
+| D-105 | Night-shift staff (e.g. an Indian night team covering US hours) fall inside the organization's quiet hours (21:00–08:00 their time), so their L0/L1 email and WhatsApp would wait until after their shift. | **Decided 2026-11-05: per-person quiet hours.** A person may have their own quiet window, overriding the organization default; the night team's is **08:00–20:00** in their own time zone. Built with quiet hours in the Notifications phase (T-6.4): nullable `users.quiet_start/quiet_end`, set in the staff dialog, used by the notifier. |
+| D-106 | Does TaskWatch send WhatsApp messages? The work order names WhatsApp first, then email, then in-app. | **Decided 2026-11-05 by the owner: WhatsApp is dropped. Email (plus in-app) is the only outside channel.** This departs from the work order (Notifications table; WO-D6 no longer needed) and should be confirmed with the Founder's Office. **Handling (owner, 2026-11-05): switch off only.** WhatsApp code, columns and past rows stay; nothing queues WhatsApp any more and the UI hides it, so it can be turned back on. Applied in Phase 6. | Notifications |
+| D-107 | The server sends task notices the client has no type for (`comment`, `due_change`, `cancelled`, `reopened`). Which preference row controls them? | **Open — default applied 2026-11-05 (T-6.1):** `comment` → Mention; `due_change`, `cancelled`, `reopened` → Progress update. Change the map in `shared/notifications.ts` (`EVENT_TYPE`) or add types if the owner prefers separate rows. | Notifications |
+| D-108 | Should a person's own quiet window (D-105) still apply when the organization switches quiet hours off (WO-D4 "alert around the clock")? | **Open — default applied 2026-11-05 (T-6.4):** no. The organization's switch governs everyone; a personal window only replaces the times. | Notifications |
+| D-109 | A generated task is titled "<schedule title> — YYYY-MM-DD" (13 extra characters), but a task title may be at most 140 characters. How long may a schedule title be? | **Open — default applied 2026-11-06 (T-7.1):** at most 127 characters ("Keep the title under 128 characters."), so every generated title fits. Alternative: allow 140 and shorten the generated title. | Recurring |
+
+Open follow-ups for D-95…D-97 (who creates organizations, platform administration, per-organization Google domains) are listed in [ADR-0010](../03-architecture/decisions/ADR-0010.md).

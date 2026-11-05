@@ -1,0 +1,5 @@
+{
+  "extends": "../server/tsconfig.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["*.ts", "../playwright.config.ts"]
+}

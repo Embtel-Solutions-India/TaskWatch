@@ -1,0 +1,27 @@
+{
+  "name": "taskwatch",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TaskWatch escalation system — Work Order FO-2026-OPS-01",
+  "workspaces": [
+    "server",
+    "client",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w client",
+    "dev:server": "npm run dev -w server",
+    "build": "npm run build -w client",
+    "start": "npm run start -w server",
+    "db:setup": "npm run db:setup -w server",
+    "db:migrate": "npm run db:migrate -w server",
+    "db:seed": "npm run db:seed -w server --",
+    "test": "npm test -w server --",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w client && tsc --noEmit -p e2e",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "concurrently": "^10.0.6"
+  }
+}

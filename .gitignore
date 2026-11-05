@@ -1,0 +1,32 @@
+# Dependencies and build output
+node_modules/
+client/dist/
+*.tsbuildinfo
+
+# Secrets: every .env file except the committed example (server/production.env holds only NODE_ENV and stays tracked)
+.env
+.env.*
+!.env.example
+
+# Data that must never reach the repository: database dumps and uploaded task files
+backups/
+*.dump
+server/uploads/
+uploads/
+
+# Test and e2e output
+test-results/
+playwright-report/
+blob-report/
+coverage/
+
+# Logs and throwaway scripts (agent one-off scripts are named *.tmp.*)
+*.log
+*.tmp.*
+
+# Local tool and editor settings
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
