@@ -161,7 +161,7 @@ export function DeliveryLogPage() {
       <div className="stats">
         <Stat label="Emails" value={count('email')} hint={`${count('email', 'sent') + count('email', 'simulated')} sent${BACKEND === 'server' && count('email', 'simulated') ? ' (simulated)' : ''} · ${count('email', 'held')} held`} />
         {WHATSAPP_ENABLED && <Stat label="WhatsApp messages" value={count('whatsapp')} hint={`${count('whatsapp', 'sent')} sent · ${count('whatsapp', 'held')} held`} />}
-        <Stat label="Held by quiet hours" value={rows.filter((d) => d.status === 'held').length} tone={rows.some((d) => d.status === 'held') ? 'warn' : undefined} help={`L0 and L1 email and WhatsApp wait until ${db.rules.quietHours.end} in the recipient's zone. L2/L3 always go out; in-app is never held.`} />
+        <Stat label="Held by quiet hours" value={rows.filter((d) => d.status === 'held').length} tone={rows.some((d) => d.status === 'held') ? 'warn' : undefined} help={`L0 and L1 ${WHATSAPP_ENABLED ? 'email and WhatsApp' : 'email'} wait until ${db.rules.quietHours.end} in the recipient's zone. L2/L3 always go out; in-app is never held.`} />
         {WHATSAPP_ENABLED ? (
           <Stat label="Skipped" value={rows.filter((d) => d.status === 'skipped').length} help="WhatsApp alerts for people with no number on file or who haven't opted in. They still get email and in-app." />
         ) : (

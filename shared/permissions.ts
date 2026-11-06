@@ -3,6 +3,7 @@
 
 export const ROLES = ['ceo', 'cos', 'manager', 'lead', 'staff'] as const;
 export type Role = (typeof ROLES)[number];
+export const ROLE_LABEL: Record<Role, string> = { ceo: 'CEO', cos: 'Chief of Staff', manager: 'Manager', lead: 'Team Lead', staff: 'Staff' };
 
 export const PERMISSIONS = [
   'view_tasks',

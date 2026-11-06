@@ -4,6 +4,8 @@
 > Common rules C-1..C-7 live in [PRODUCT_REQUIREMENTS.md §2](../PRODUCT_REQUIREMENTS.md). Visibility rules `canViewTask` / `canViewUser` are specified with TASK-05 and STAFF-01 and are only applied here.
 > Nothing here has been executed. No test has been run.
 
+**Built 2026-11-06 (Phase 8 Batch A, T-8.4; server).** `GET /api/search` in `services/search.ts`; see API_CONTRACTS §2.1. Task level badges use the stored level (KI-48). **Client built 2026-11-06 (T-8.5):** the palette waits 250 ms after typing and drops replies for older text (browser-checked: 5 keystrokes, 1 request); mock and server return one shape; inactive people are marked.
+
 ## SRCH-01 Global search
 
 **Description.** One search box across tasks, people and teams that returns only what the user may see. [V-C `services/api/misc.ts:107-120`; `app/SearchPalette.tsx:21-125`; WO "Access control enforced on the server for every request"]

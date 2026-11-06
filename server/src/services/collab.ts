@@ -6,7 +6,7 @@ import * as clock from '../clock.js';
 import { tx } from '../db/pool.js';
 import { isOpenStatus } from '../domain.js';
 import { forbidden, invalid, notFound } from '../http/errors.js';
-import { canView, isOverseerOf } from './access.js';
+import { can, canView, isOverseerOf } from './access.js';
 import { appendLog } from './activity.js';
 import { getDirectory, type DirUser } from './directory.js';
 import { act, guardText, lockTask, notifyUser, ref, storeAttachment, withCleanup, type PendingFile } from './tasks.js';
@@ -102,7 +102,8 @@ export async function removeAttachment(actor: DirUser, attachmentId: number): Pr
     if (!rows[0]) throw notFound('Attachment not found.');
     const t = await lockTask(c, rows[0].task_id, actor, dir, 'Attachment not found.');
     if (!isOpenStatus(t.status)) throw forbidden(`You can't remove files on ${ref(t.id)} in its current state.`);
-    if (rows[0].uploaded_by !== actor.id && !isOverseerOf(actor, t, dir)) throw forbidden('Only the uploader or a task supervisor can remove this file.');
+    // D-33 (KI-40): like attaching, a supervisor must also hold create_tasks, so a read-only senior cannot remove files.
+    if (rows[0].uploaded_by !== actor.id && !(isOverseerOf(actor, t, dir) && can(actor, dir, 'create_tasks'))) throw forbidden('Only the uploader or a task supervisor can remove this file.');
     await appendLog(c, { taskId: t.id, actorId: actor.id, kind: 'attachment_removed', before: { attachmentId, name: rows[0].file_name, sha256: rows[0].sha256 } });
     await c.query('update attachments set removed_at = $2, removed_by = $3 where id = $1', [attachmentId, clock.now(), actor.id]);
     return t.id;

@@ -4,6 +4,7 @@
 // hash-chained activity log; admin_log keeps rule, directory and admin changes (DATABASE_DESIGN §3.10).
 import { isCoS } from '@taskwatch/shared/permissions';
 import type { TaskAction } from '@taskwatch/shared/workflow';
+import { taskProgress, type Purpose } from '@taskwatch/shared/performance';
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -121,11 +122,25 @@ export interface TaskInput {
   startAt: Date | null;
   reviewRequired: boolean;
   parentId: number | null;
+  /** PERF (FRD §4): set by the task giver. Estimate and purpose are required except on drafts and system-generated tasks. */
+  target: number | null;
+  unit: string | null;
+  estimatedHours: number | null;
+  purpose: Purpose | null;
+}
+
+/** PERF field rules shared by create, edit and publish. */
+export function measuredErrors(p: { target: number | null; unit: string | null; estimatedHours: number | null; purpose: Purpose | null }, requireMeasures: boolean): Record<string, string> {
+  const f: Record<string, string> = {};
+  if (p.target !== null && !p.unit) f.unit = 'Name the unit, e.g. emails.';
+  if (requireMeasures && p.estimatedHours === null) f.estimatedHours = 'Between 0.25 and 200 hours.';
+  if (requireMeasures && p.purpose === null) f.purpose = 'Choose revenue or support.';
+  return f;
 }
 
 /** The FRD's field rules; `existing` relaxes what an edit may leave unchanged. Returns the derived entity (D-63). */
-async function checkTask(c: pg.PoolClient, actor: DirUser, dir: Directory, p: TaskInput, opts: { draft: boolean; existing?: any; now: Date }): Promise<string> {
-  const f: Record<string, string> = {};
+async function checkTask(c: pg.PoolClient, actor: DirUser, dir: Directory, p: TaskInput, opts: { draft: boolean; existing?: any; now: Date; system?: boolean }): Promise<string> {
+  const f: Record<string, string> = measuredErrors(p, !opts.draft && !opts.system);
   const title = p.title.trim();
   if (title.length < 4) f.title = 'Give the task a title of at least 4 characters.';
   else if (title.length > 140) f.title = 'Keep the title under 140 characters.';
@@ -172,15 +187,15 @@ export async function createTask(actor: DirUser, p: TaskInput, opts: { draft?: b
   guardText(p.title, p.description, p.instructions);
   const now = clock.now();
   return tx(async (c) => {
-    const entityId = await checkTask(c, actor, dir, p, { draft, now });
+    const entityId = await checkTask(c, actor, dir, p, { draft, now, system: opts.recurringId !== undefined });
     const assignee = dir.must(p.assigneeId);
     const { rows } = await c.query<{ id: number }>(
       `insert into tasks (title, description, instructions, category, entity_id, assignee_id, assigner_id, created_by, reviewer_id, priority,
          due_at, original_due_at, start_at, review_required, parent_id, team_id, created_at, assigned_at, clock_started_at, updated_at,
-         recurring_id, organization_id, status, occurrence_date)
-       values ($1,$2,$3,$4,$5,$6,$7,$7,$7,$8,$9,$9,$10,$11,$12,$13,$14,$14,$14,$14,$15,$16,$17,$18) returning id`,
+         recurring_id, organization_id, status, occurrence_date, target, unit, estimated_hours, purpose)
+       values ($1,$2,$3,$4,$5,$6,$7,$7,$7,$8,$9,$9,$10,$11,$12,$13,$14,$14,$14,$14,$15,$16,$17,$18,$19,$20,$21,$22) returning id`,
       [p.title.trim(), p.description, p.instructions, p.category, entityId, p.assigneeId, actor.id, p.priority, p.dueAt, p.startAt, p.reviewRequired,
-        p.parentId, p.teamId ?? assignee.teamId, now, opts.recurringId ?? null, actor.organizationId, draft ? 'draft' : 'assigned', opts.occurrenceDate ?? null],
+        p.parentId, p.teamId ?? assignee.teamId, now, opts.recurringId ?? null, actor.organizationId, draft ? 'draft' : 'assigned', opts.occurrenceDate ?? null, p.target, p.target === null ? null : p.unit, p.estimatedHours, p.purpose],
     );
     const id = rows[0]!.id;
     await appendLog(c, {
@@ -208,6 +223,8 @@ async function assignNow(c: pg.PoolClient, taskId: number, actor: DirUser, assig
 export async function publishTask(actor: DirUser, taskId: number): Promise<void> {
   await act(actor, taskId, 'publish', 'assign this draft', async ({ c, t, dir, now }) => {
     if (t.due_at.getTime() <= now.getTime()) throw invalid({ dueDate: 'Move the due date into the future before assigning.' });
+    const missing = measuredErrors({ target: t.target, unit: t.unit, estimatedHours: t.estimated_hours, purpose: t.purpose }, true);
+    if (Object.keys(missing).length) throw invalid(missing);
     if (!assignableUsers(actor, dir).some((u) => u.id === t.assignee_id)) throw forbidden('The selected assignee is outside your scope.');
     await c.query(`update tasks set status = 'assigned', assigned_at = $2, clock_started_at = $2, updated_at = $2 where id = $1`, [taskId, now]);
     await assignNow(c, taskId, actor, dir.must(t.assignee_id), dir, now);
@@ -228,14 +245,15 @@ export async function updateTask(actor: DirUser, taskId: number, p: TaskInput): 
       if (t.status !== 'draft') await doReassign(x, actor, p.assigneeId, 'Changed while editing the task');
     }
     if (t.status !== 'draft' && p.dueAt.getTime() !== t.due_at.getTime()) await doDueChange(x, actor, p.dueAt, 'Changed while editing the task');
-    const fields = { title: p.title.trim(), description: p.description, instructions: p.instructions, category: p.category, priority: p.priority, team_id: p.teamId ?? t.team_id, start_at: p.startAt, review_required: p.reviewRequired, parent_id: p.parentId };
+    const fields = { title: p.title.trim(), description: p.description, instructions: p.instructions, category: p.category, priority: p.priority, team_id: p.teamId ?? t.team_id, start_at: p.startAt, review_required: p.reviewRequired, parent_id: p.parentId,
+      target: p.target, unit: p.target === null ? null : p.unit, estimated_hours: p.estimatedHours, purpose: p.purpose };
     const changed = Object.entries(fields).filter(([k, v]) => String(v ?? '') !== String(t[k] ?? ''));
     await c.query(
       `update tasks set title = $2, description = $3, instructions = $4, category = $5, priority = $6, team_id = $7, start_at = $8,
-         review_required = $9, parent_id = $10, updated_at = $11,
+         review_required = $9, parent_id = $10, updated_at = $11, target = $14, unit = $15, estimated_hours = $16, purpose = $17,
          assignee_id = case when status = 'draft' then $12 else assignee_id end, due_at = case when status = 'draft' then $13 else due_at end
        where id = $1`,
-      [taskId, fields.title, fields.description, fields.instructions, fields.category, fields.priority, fields.team_id, fields.start_at, fields.review_required, fields.parent_id, now, p.assigneeId, p.dueAt],
+      [taskId, fields.title, fields.description, fields.instructions, fields.category, fields.priority, fields.team_id, fields.start_at, fields.review_required, fields.parent_id, now, p.assigneeId, p.dueAt, fields.target, fields.unit, fields.estimated_hours, fields.purpose],
     );
     if (changed.length) {
       await appendLog(c, {
@@ -350,7 +368,7 @@ async function recordAssigneeUpdate(c: pg.PoolClient, taskId: number, now: Date)
 const fileMeta = (fs: PendingFile[] = []) => (fs.length ? { files: fs.map((f) => ({ name: f.name, size: f.size, sha256: f.sha256 })) } : {});
 
 /** WF-03: the only routine way to reset the silence clock. Moves the task to In progress (also from Blocked). */
-export async function postProgress(actor: DirUser, taskId: number, input: { message: string; percent?: number; files?: PendingFile[] }): Promise<void> {
+export async function postProgress(actor: DirUser, taskId: number, input: { message: string; percent?: number; achieved?: number; files?: PendingFile[] }): Promise<void> {
   const message = input.message.trim();
   const f: Record<string, string> = {};
   if (message.length < 5) f.message = 'Describe what changed (at least 5 characters).';
@@ -358,6 +376,9 @@ export async function postProgress(actor: DirUser, taskId: number, input: { mess
   if (Object.keys(f).length) throw invalid(f);
   guardText(message, ...(input.files ?? []).map((f) => f.name));
   await withCleanup((written) => act(actor, taskId, 'progress', 'post progress', async ({ c, t, dir, now, rules }) => {
+    if (input.achieved !== undefined && t.target === null) throw invalid({ achieved: 'This task has no target to report against.' });
+    // PERF: reporting an achieved amount sets progress from it (FRD §4); it is an assignee update like any other.
+    const percent = input.achieved !== undefined ? taskProgress({ status: t.status, target: t.target, achieved: input.achieved, progress: t.progress })! : input.percent;
     const next: Status = ['assigned', 'reopened', 'changes_requested', 'blocked'].includes(t.status) ? 'in_progress' : t.status;
     const logId = await appendLog(c, {
       taskId,
@@ -365,10 +386,10 @@ export async function postProgress(actor: DirUser, taskId: number, input: { mess
       kind: 'update',
       body: message,
       before: next !== t.status ? { status: t.status } : null,
-      after: { ...(next !== t.status ? { status: next } : {}), ...(input.percent !== undefined ? { progress: input.percent } : {}), ...fileMeta(input.files) },
+      after: { ...(next !== t.status ? { status: next } : {}), ...(percent !== undefined ? { progress: percent } : {}), ...(input.achieved !== undefined ? { achieved: input.achieved } : {}), ...fileMeta(input.files) },
     });
     for (const file of input.files ?? []) await storeAttachment(c, { taskId, logId, actor, file, now, context: 'progress', written });
-    await c.query('update tasks set status = $2, blocked_reason = null, progress = coalesce($3, progress) where id = $1', [taskId, next, input.percent ?? null]);
+    await c.query('update tasks set status = $2, blocked_reason = null, progress = coalesce($3, progress), achieved = coalesce($4, achieved) where id = $1', [taskId, next, percent ?? null, input.achieved ?? null]);
     await recordAssigneeUpdate(c, taskId, now);
     if (t.assigner_id !== actor.id) await notifyUser(c, dir, rules, t.assigner_id, 'progress', taskId, `Update on “${t.title}”`, `${actor.name}: ${message}`);
   }));
@@ -393,13 +414,14 @@ export async function blockTask(actor: DirUser, taskId: number, reasonInput: str
 /* ---------- Submit, complete, review (T-4.7; WF-04…06) ---------- */
 
 /** WF-04: opens review round n+1; the clock restarts. */
-export async function submitTask(actor: DirUser, taskId: number, input: { note: string; files?: PendingFile[] }): Promise<void> {
+export async function submitTask(actor: DirUser, taskId: number, input: { note: string; files?: PendingFile[] } & FinishReport): Promise<void> {
   const note = input.note.trim();
   if (note.length < 5) throw invalid({ note: 'Summarize what you are submitting.' });
   guardText(note, ...(input.files ?? []).map((f) => f.name));
   await withCleanup((written) => act(actor, taskId, 'submit', 'submit this task for review', async ({ c, t, dir, now, rules }) => {
     const { rows } = await c.query<{ n: number }>('select coalesce(max(round), 0)::int + 1 as n from reviews where task_id = $1', [taskId]);
     const round = rows[0]!.n;
+    await storeFinish(c, taskId, finishValues(t, input, now));
     await c.query('insert into reviews (task_id, round, submitted_by, submitted_at, note) values ($1,$2,$3,$4,$5)', [taskId, round, actor.id, now, note]);
     const logId = await appendLog(c, { taskId, actorId: actor.id, kind: 'review_submitted', body: note, before: { status: t.status }, after: { status: 'submitted', round, ...fileMeta(input.files) } });
     for (const file of input.files ?? []) await storeAttachment(c, { taskId, logId, actor, file, now, context: 'review', written });
@@ -411,6 +433,35 @@ export async function submitTask(actor: DirUser, taskId: number, input: { note: 
   }));
 }
 
+/** PERF: what the assignee reports when finishing (FRD §4). */
+export interface FinishReport {
+  achieved?: number;
+  result?: string;
+  shortfallReason?: string;
+}
+
+/**
+ * Validates a finishing report against the task and returns the values to store. A scored task that ends short of its
+ * target, or after its due date, needs a reason (the giver later accepts or not).
+ */
+function finishValues(t: any, r: FinishReport, now: Date): { achieved: number | null; result: string | null; shortfallReason: string | null } {
+  const f: Record<string, string> = {};
+  if (r.achieved !== undefined && t.target === null) f.achieved = 'This task has no target to report against.';
+  const achieved = r.achieved ?? t.achieved;
+  const result = r.result?.trim() || t.result || null;
+  const shortfallReason = r.shortfallReason?.trim() || t.shortfall_reason || null;
+  const short = t.target !== null && (achieved ?? 0) < t.target;
+  const late = now.getTime() > t.due_at.getTime();
+  if (t.scored && (short || late) && !shortfallReason) f.shortfallReason = 'Explain the shortfall or delay.';
+  if (Object.keys(f).length) throw invalid(f);
+  guardText(result, shortfallReason);
+  return { achieved, result, shortfallReason };
+}
+
+async function storeFinish(c: pg.PoolClient, taskId: number, v: ReturnType<typeof finishValues>) {
+  await c.query('update tasks set achieved = $2, result = $3, shortfall_reason = $4 where id = $1', [taskId, v.achieved, v.result, v.shortfallReason]);
+}
+
 async function closeAsCompleted(c: pg.PoolClient, taskId: number, actor: DirUser, now: Date) {
   await c.query(
     `update tasks set status = 'completed', progress = 100, completed_at = $2, closed_at = $2, closed_by = $3, blocked_reason = null, updated_at = $2 where id = $1`,
@@ -419,7 +470,7 @@ async function closeAsCompleted(c: pg.PoolClient, taskId: number, actor: DirUser
 }
 
 /** WF-05 (R-2): the assignee marks it Done from Open, In progress or Blocked when no review is required. */
-export async function completeTask(actor: DirUser, taskId: number, noteInput = ''): Promise<void> {
+export async function completeTask(actor: DirUser, taskId: number, noteInput = '', report: FinishReport = {}): Promise<void> {
   const note = noteInput.trim();
   guardText(note);
   await act(
@@ -428,8 +479,10 @@ export async function completeTask(actor: DirUser, taskId: number, noteInput = '
     'complete',
     'mark this task done',
     async ({ c, t, dir, now, rules }) => {
+      const v = finishValues(t, report, now);
+      await storeFinish(c, taskId, v);
       await closeAsCompleted(c, taskId, actor, now);
-      await appendLog(c, { taskId, actorId: actor.id, kind: 'completed', body: note || null, before: { status: t.status }, after: { status: 'completed' } });
+      await appendLog(c, { taskId, actorId: actor.id, kind: 'completed', body: note || null, before: { status: t.status, achieved: t.achieved }, after: { status: 'completed', ...v } });
       if (t.assigner_id !== actor.id) await notifyUser(c, dir, rules, t.assigner_id, 'completed', taskId, `Done: “${t.title}”`, `${actor.name} marked it done.${note ? ` ${note}` : ''}`);
     },
     ({ t }) => {
@@ -441,7 +494,11 @@ export async function completeTask(actor: DirUser, taskId: number, noteInput = '
 }
 
 /** WF-06: approve, or send back (changes requested / rejected); one decision per round, the second gets 409. */
-export async function reviewTask(actor: DirUser, taskId: number, input: { decision: 'approved' | 'changes_requested' | 'rejected'; comment: string }): Promise<void> {
+export async function reviewTask(
+  actor: DirUser,
+  taskId: number,
+  input: { decision: 'approved' | 'changes_requested' | 'rejected'; comment: string; qualityScore?: number; outcomeScore?: number; shortfallAccepted?: boolean },
+): Promise<void> {
   const comment = input.comment.trim();
   if (input.decision !== 'approved' && comment.length < 5) throw invalid({ comment: 'Explain what needs to change.' });
   guardText(comment);
@@ -453,11 +510,25 @@ export async function reviewTask(actor: DirUser, taskId: number, input: { decisi
     async ({ c, t, dir, now, rules }) => {
       const { rows } = await c.query<{ id: number; round: number }>('select id, round from reviews where task_id = $1 and decision is null', [taskId]);
       const round = rows[0]!;
+      if (input.decision === 'approved' && t.scored) {
+        // PERF: approval carries the reviewer's quality score, and the outcome score when there is no target.
+        const f: Record<string, string> = {};
+        if (input.qualityScore === undefined) f.qualityScore = 'Give a quality score from 0 to 100.';
+        if (t.target === null && input.outcomeScore === undefined) f.outcomeScore = 'Give an outcome score from 0 to 100.';
+        if (input.shortfallAccepted !== undefined && !t.shortfall_reason) f.shortfallAccepted = 'There is no shortfall or delay reason to decide on.';
+        if (Object.keys(f).length) throw invalid(f);
+        await c.query(
+          `update tasks set quality_score = $2, outcome_score = coalesce($3, outcome_score), shortfall_accepted = coalesce($4, shortfall_accepted),
+             shortfall_decided_by = case when $4::boolean is null then shortfall_decided_by else $5 end,
+             shortfall_decided_at = case when $4::boolean is null then shortfall_decided_at else $6 end where id = $1`,
+          [taskId, input.qualityScore, t.target === null ? input.outcomeScore : null, input.shortfallAccepted ?? null, actor.id, now],
+        );
+      }
       await c.query('update reviews set decision = $2, decided_at = $3, reviewer_id = $4, comment = $5 where id = $1', [round.id, input.decision, now, actor.id, comment || null]);
       const next: Status = input.decision === 'approved' ? 'completed' : 'changes_requested';
       if (next === 'completed') await closeAsCompleted(c, taskId, actor, now);
       else await c.query(`update tasks set status = 'changes_requested', clock_started_at = $2, updated_at = $2 where id = $1`, [taskId, now]);
-      await appendLog(c, { taskId, actorId: actor.id, kind: 'review_decided', body: comment || null, before: { status: t.status }, after: { status: next, round: round.round, decision: input.decision } });
+      await appendLog(c, { taskId, actorId: actor.id, kind: 'review_decided', body: comment || null, before: { status: t.status, qualityScore: t.quality_score, outcomeScore: t.outcome_score, shortfallAccepted: t.shortfall_accepted }, after: { status: next, round: round.round, decision: input.decision, ...(input.decision === 'approved' ? { qualityScore: input.qualityScore ?? null, outcomeScore: input.outcomeScore ?? null, shortfallAccepted: input.shortfallAccepted ?? null } : {}) } });
       await notifyUser(c, dir, rules, t.assignee_id, 'review_decision', taskId, `Review of “${t.title}”`, `${actor.name}: ${input.decision.replace('_', ' ')}${comment ? ` — ${comment}` : ''}`);
     },
     async ({ c, t }) => {
@@ -466,6 +537,21 @@ export async function reviewTask(actor: DirUser, taskId: number, input: { decisi
       if (!rowCount) throw new HttpError(409, 'There is no pending submission to review.');
     },
   );
+}
+
+/** PERF Rate step (FRD §4): the giver scores a finished task without a target, and/or accepts a shortfall or delay. */
+export async function rateTask(actor: DirUser, taskId: number, input: { outcomeScore?: number; shortfallAccepted?: boolean }): Promise<void> {
+  await act(actor, taskId, 'rate', 'rate this task', async ({ c, t, now }) => {
+    if (input.outcomeScore !== undefined && t.target !== null) throw invalid({ outcomeScore: "This task's outcome comes from its target." });
+    if (input.shortfallAccepted !== undefined && !t.shortfall_reason && !t.blocked_reason) throw invalid({ shortfallAccepted: 'There is no shortfall or delay reason to decide on.' });
+    await c.query(
+      `update tasks set outcome_score = coalesce($2, outcome_score), shortfall_accepted = coalesce($3, shortfall_accepted),
+         shortfall_decided_by = case when $3::boolean is null then shortfall_decided_by else $4 end,
+         shortfall_decided_at = case when $3::boolean is null then shortfall_decided_at else $5 end, updated_at = $5 where id = $1`,
+      [taskId, input.outcomeScore ?? null, input.shortfallAccepted ?? null, actor.id, now],
+    );
+    await appendLog(c, { taskId, actorId: actor.id, kind: 'rated', before: { outcomeScore: t.outcome_score, shortfallAccepted: t.shortfall_accepted }, after: input });
+  });
 }
 
 /* ---------- Reassign, cancel, reopen (T-4.8; WF-07…09, D-29, D-30) ---------- */
@@ -530,11 +616,13 @@ export async function reopenTask(actor: DirUser, taskId: number, input: { reason
       await appendLog(c, { taskId, actorId: actor.id, kind: 'due_change', body: reason, before: { dueAt: t.due_at.toISOString() }, after: { dueAt: input.dueAt!.toISOString(), as: 'reopen' } });
     }
     await c.query(
+      // PERF: the new round is judged afresh, so the old ratings and reason go (they stay in the log below).
       `update tasks set status = 'reopened', due_at = $2, completed_at = null, closed_at = null, closed_by = null, clock_started_at = $3,
-         acknowledged_at = null, snooze_until = null, updated_at = $3 where id = $1`,
+         acknowledged_at = null, snooze_until = null, updated_at = $3, quality_score = null, outcome_score = null, shortfall_reason = null,
+         shortfall_accepted = null, shortfall_decided_by = null, shortfall_decided_at = null where id = $1`,
       [taskId, input.dueAt, now],
     );
-    await appendLog(c, { taskId, actorId: actor.id, kind: 'reopened', body: reason, before: { status: t.status }, after: { status: 'reopened' } });
+    await appendLog(c, { taskId, actorId: actor.id, kind: 'reopened', body: reason, before: { status: t.status, qualityScore: t.quality_score, outcomeScore: t.outcome_score, shortfallReason: t.shortfall_reason, shortfallAccepted: t.shortfall_accepted }, after: { status: 'reopened' } });
     await notifyUser(c, dir, rules, t.assignee_id, 'reopened', taskId, `Reopened: “${t.title}”`, `${actor.name}: ${reason}`);
   });
 }
@@ -621,26 +709,6 @@ export async function postUpdate(actor: DirUser, taskId: number, input: LegacyUp
   if (input.status === 'completed') return completeTask(actor, taskId, input.body);
   if (!input.body.trim()) throw badRequest('Write an update');
   return postProgress(actor, taskId, { message: input.body, files: input.files });
-}
-
-/** `POST /tasks/:id/status`: close or reopen on someone's behalf (manager or CoS; the assigner may reopen). */
-export async function setStatus(actor: DirUser, taskId: number, request: 'done' | 'open', note: string): Promise<void> {
-  const status: Status = request === 'done' ? 'completed' : 'reopened';
-  if (!note.trim()) throw badRequest('Add a note');
-  guardText(note);
-  const dir = await getDirectory(actor.organizationId);
-  await tx(async (c) => {
-    const t = await lockTask(c, taskId, actor, dir);
-    const perms = taskPermissions(actor, t, dir);
-    if (status === 'completed' ? !perms.close : !perms.reopen) throw forbidden();
-    const now = clock.now();
-    await appendLog(c, { taskId, actorId: actor.id, kind: 'status', body: note.trim(), before: { status: t.status }, after: { status } });
-    if (status === 'completed') await closeAsCompleted(c, taskId, actor, now);
-    else {
-      await c.query(`update tasks set status = 'reopened', closed_at = null, completed_at = null, closed_by = null, clock_started_at = $2, updated_at = $2 where id = $1`, [taskId, now]);
-    }
-    await applyLevel(c, taskId, dir);
-  });
 }
 
 /* ---------- Escalation acknowledgement (reworked in Phase 5); comments live in collab.ts ---------- */

@@ -3,13 +3,7 @@ import type { NotificationType, Permission, Priority, Role, RulesConfig, Status 
 export const HOUR = 3_600_000;
 export const DAY = 24 * HOUR;
 
-export const ROLE_LABEL: Record<Role, string> = {
-  ceo: 'CEO',
-  cos: 'Chief of Staff',
-  manager: 'Manager',
-  lead: 'Team Lead',
-  staff: 'Staff',
-};
+export { ROLE_LABEL } from '@taskwatch/shared/permissions';
 /** Seniority rank; higher outranks lower. */
 export const ROLE_RANK: Record<Role, number> = { staff: 0, lead: 1, manager: 2, cos: 3, ceo: 4 };
 

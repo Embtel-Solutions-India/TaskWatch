@@ -4,10 +4,9 @@ import { LEVEL_LABEL, LEVEL_SHORT, NOTIFICATION_LABEL } from '../../constants';
 import { ColumnChart, Heatmap, LineChart, Sparkline } from '../../components/charts';
 import { Icon } from '../../components/icons';
 import { Avatar, Card, Empty, InfoTip, LevelBadge, PriorityBadge, Segmented, StatusBadge } from '../../components/ui';
-import type { TaskView } from '../../services/api/base';
-import type { Activity, User } from '../../types';
+import { activityText, activityType } from '../../services/api/tasksServer';
 import { cx, formatShort, relative } from '../../utils/format';
-import { HEALTH_HELP, type AttentionItem, type Health, type Kpi, type Range, type TrendPoint, type WorkloadRow } from './insights';
+import { HEALTH_HELP, type AttentionItem, type DashActivity, type Health, type Kpi, type Range, type TaskBrief, type TrendPoint, type WorkloadRow } from './insights';
 
 export function KpiStrip({ items }: { items: Kpi[] }) {
   return (
@@ -44,14 +43,14 @@ export function KpiStrip({ items }: { items: Kpi[] }) {
 
 export function HealthCard({ h, title = 'Operational health', base }: { h: Health; title?: string; base: string }) {
   const nav = useNavigate();
-  const total = h.onTrack.length + h.atRisk.length + h.overdue.length + h.escalated.length;
+  const total = h.onTrack + h.atRisk + h.overdue + h.escalated;
   const segs = [
-    { k: 'On track', v: h.onTrack.length, c: 'seg-ok', to: `${base}?level=none` },
-    { k: 'At risk', v: h.atRisk.length, c: 'seg-warn', to: `${base}?level=0` },
-    { k: 'Escalated', v: h.escalated.length, c: 'seg-esc', to: '/escalations' },
-    { k: 'Overdue', v: h.overdue.length, c: 'seg-danger', to: `${base}?due=overdue` },
+    { k: 'On track', v: h.onTrack, c: 'seg-ok', to: `${base}?level=none` },
+    { k: 'At risk', v: h.atRisk, c: 'seg-warn', to: `${base}?level=0` },
+    { k: 'Escalated', v: h.escalated, c: 'seg-esc', to: '/escalations' },
+    { k: 'Overdue', v: h.overdue, c: 'seg-danger', to: `${base}?due=overdue` },
   ];
-  const healthy = total ? Math.round((h.onTrack.length / total) * 100) : 100;
+  const healthy = total ? Math.round((h.onTrack / total) * 100) : 100;
   return (
     <Card title={<>{title} <InfoTip text={HEALTH_HELP} /></>} sub={`${total} open tasks`}>
       <div className="health">
@@ -102,7 +101,7 @@ export function AttentionPanel({ items, title = 'Attention required', limit = 6 
                 <div className="attn-top">
                   <strong>{i.reason}</strong>
                   <span className="muted">· {i.detail}</span>
-                  <LevelBadge level={i.task.level} acked={i.task.escalationAcked} />
+                  <LevelBadge level={i.task.level} />
                 </div>
                 <Link to={`/tasks/${i.task.id}`} className="attn-title">
                   <span className="mono">{i.task.id}</span> {i.task.title}
@@ -223,7 +222,7 @@ export function FunnelCard({ data, range, title = 'Escalation funnel' }: { data:
   );
 }
 
-export function ActivityCard({ items, users, title = 'Recent activity', limit = 8 }: { items: Activity[]; users: User[]; title?: string; limit?: number }) {
+export function ActivityCard({ items, title = 'Recent activity', limit = 8 }: { items: DashActivity[]; title?: string; limit?: number }) {
   const icon: Record<string, string> = { assigned: 'send', progress: 'arrow-up', acknowledged: 'check', extension_decided: 'clock', escalated: 'alert', review_decided: 'review', completed: 'circle-check', reassigned: 'users', created: 'plus', review_submitted: 'review', comment: 'message' };
   return (
     <Card title={title}>
@@ -232,21 +231,23 @@ export function ActivityCard({ items, users, title = 'Recent activity', limit = 
       ) : (
         <ol className="feed">
           {items.slice(0, limit).map((a) => {
-            const actor = users.find((u) => u.id === a.actorId);
+            const actor = a.actor;
+            const type = activityType(a.kind);
+            const text = activityText(a);
             return (
               <li key={a.id}>
-                {actor ? <Avatar name={actor.name} size={26} /> : <span className="feed-sys"><Icon name={icon[a.type] ?? 'circle'} size={13} /></span>}
+                {actor ? <Avatar name={actor.name} size={26} /> : <span className="feed-sys"><Icon name={icon[type] ?? 'circle'} size={13} /></span>}
                 <div>
                   <span>
-                    <strong>{actor?.name ?? 'TaskWatch'}</strong> {a.text.charAt(0).toLowerCase() + a.text.slice(1)}{' '}
+                    <strong>{actor?.name ?? 'TaskWatch'}</strong> {text.charAt(0).toLowerCase() + text.slice(1)}{' '}
                     <Link to={`/tasks/${a.taskId}`} className="mono">
                       {a.taskId}
                     </Link>
                   </span>
                   <time className="muted small">{relative(a.at)}</time>
                 </div>
-                <span className={cx('feed-icon', a.type === 'escalated' && 'tone-danger', a.type === 'completed' && 'tone-ok')}>
-                  <Icon name={icon[a.type] ?? 'circle'} size={13} />
+                <span className={cx('feed-icon', type === 'escalated' && 'tone-danger', type === 'completed' && 'tone-ok')}>
+                  <Icon name={icon[type] ?? 'circle'} size={13} />
                 </span>
               </li>
             );
@@ -266,7 +267,7 @@ export function HeatmapCard({ grid, title = 'Update activity' }: { grid: number[
   );
 }
 
-export function TaskMiniList({ tasks, empty, showAssignee = true }: { tasks: TaskView[]; empty: string; showAssignee?: boolean }) {
+export function TaskMiniList({ tasks, empty, showAssignee = true }: { tasks: TaskBrief[]; empty: string; showAssignee?: boolean }) {
   if (!tasks.length) return <p className="muted pad-sm">{empty}</p>;
   return (
     <ul className="mini-tasks">

@@ -33,7 +33,10 @@ export function listTasks(scope: TaskScope): TaskView[] | Promise<TaskView[]> {
       const reports = user.role === 'cos' ? null : reportsOf(db, user.id);
       rows = rows.filter((t) => t.status !== 'draft' && (reports ? reports.has(t.assigneeId) : t.assigneeId !== user.id));
     }
-    return rows.map((t) => toView(db, t));
+    return rows.map((t) => ({
+      ...toView(db, t),
+      escalatedToMe: db.escalations.some((e) => e.taskId === t.id && e.level >= 1 && e.status !== 'resolved' && e.recipientIds.includes(user.id)),
+    }));
   });
 }
 
@@ -51,7 +54,7 @@ function mockGetTask(id: string) {
       activities: by(db.activities).sort((a, b) => b.at.localeCompare(a.at)),
       comments: by(db.comments),
       updates: by(db.updates).sort((a, b) => b.at.localeCompare(a.at)),
-      attachments: by(db.attachments),
+      attachments: by(db.attachments.filter((x) => !x.removedAt)),
       reviews: by(db.reviews).sort((a, b) => a.round - b.round),
       extensions: by(db.extensions).sort((a, b) => b.at.localeCompare(a.at)),
       assignments: by(db.assignments).sort((a, b) => a.at.localeCompare(b.at)),
@@ -83,6 +86,11 @@ export interface TaskInput {
   parentId: string;
   draft: boolean;
   files: File[];
+  /** PERF: form strings; empty = not set. */
+  target: string;
+  unit: string;
+  estimatedHours: string;
+  purpose: '' | 'revenue' | 'support';
 }
 
 function validateTaskInput(db: Db, user: User, input: TaskInput, at: number, existing?: Task): string {
@@ -108,7 +116,7 @@ function validateTaskInput(db: Db, user: User, input: TaskInput, at: number, exi
 function addFiles(db: Db, taskId: string, files: File[], by: string, at: string, context: Attachment['context']): string[] {
   const ids: string[] = [];
   for (const file of files) {
-    if (file.size > 25 * 1024 * 1024) throw new ApiError(422, `${file.name} is larger than 25 MB.`);
+    if (file.size > 15 * 1024 * 1024) throw new ApiError(422, `${file.name} is larger than 15 MB.`); // D-13 / D-69
     const a: Attachment = { id: nextId(db, 'att'), taskId, name: file.name, size: file.size, mime: file.type || 'application/octet-stream', uploadedBy: by, at, context };
     db.attachments.push(a);
     try {
@@ -240,7 +248,14 @@ export function startTask(id: string): void | Promise<void> {
   });
 }
 
-export function postProgress(id: string, input: { message: string; percent: number; files: File[] }): void | Promise<void> {
+/** PERF: what the assignee reports when finishing (server mode; the prototype ignores it). */
+export interface FinishReport {
+  achieved?: number;
+  result?: string;
+  shortfallReason?: string;
+}
+
+export function postProgress(id: string, input: { message: string; percent: number; achieved?: number; files: File[] }): void | Promise<void> {
   if (BACKEND === 'server') return tasksServer.progress(id, input);
   mutate((db, user, at) => {
     const task = findTask(db, id);
@@ -262,7 +277,7 @@ export function postProgress(id: string, input: { message: string; percent: numb
   });
 }
 
-export function submitForReview(id: string, input: { note: string; files: File[] }): void | Promise<void> {
+export function submitForReview(id: string, input: { note: string; files: File[] } & FinishReport): void | Promise<void> {
   if (BACKEND === 'server') return tasksServer.submit(id, input);
   mutate((db, user, at) => {
     const task = findTask(db, id);
@@ -280,8 +295,8 @@ export function submitForReview(id: string, input: { note: string; files: File[]
   });
 }
 
-export function completeTask(id: string, note: string): void | Promise<void> {
-  if (BACKEND === 'server') return tasksServer.complete(id, note);
+export function completeTask(id: string, note: string, report: FinishReport = {}): void | Promise<void> {
+  if (BACKEND === 'server') return tasksServer.complete(id, note, report);
   mutate((db, user, at) => {
     const task = findTask(db, id);
     assertAction(db, user, task, 'complete', 'complete this task');
@@ -295,7 +310,28 @@ export function completeTask(id: string, note: string): void | Promise<void> {
   });
 }
 
-export function reviewTask(id: string, input: { decision: 'approved' | 'changes_requested' | 'rejected'; comment: string }): void | Promise<void> {
+export interface ReviewInput {
+  decision: 'approved' | 'changes_requested' | 'rejected';
+  comment: string;
+  /** PERF (server): required when approving a scored task; outcome only when it has no target. */
+  qualityScore?: number;
+  outcomeScore?: number;
+  shortfallAccepted?: boolean;
+}
+
+/** PERF Rate step: outcome score (no target) and/or the decision on a shortfall or delay. */
+export interface RateInput {
+  outcomeScore?: number;
+  shortfallAccepted?: boolean;
+}
+
+/** PERF: server only; the prototype has no ratings. */
+export function rateTask(id: string, input: RateInput): void | Promise<void> {
+  if (BACKEND === 'server') return tasksServer.rate(id, input);
+  throw new ApiError(400, 'Ratings are available with the server backend.');
+}
+
+export function reviewTask(id: string, input: ReviewInput): void | Promise<void> {
   if (BACKEND === 'server') return tasksServer.review(id, input);
   mutate((db, user, at) => {
     const task = findTask(db, id);
@@ -505,15 +541,13 @@ export function addAttachments(id: string, files: File[]): void | Promise<void> 
 export function removeAttachment(attId: string): void | Promise<void> {
   if (BACKEND === 'server') return tasksServer.removeAttachment(attId);
   mutate((db, user, at) => {
-    const a = db.attachments.find((x) => x.id === attId);
+    const a = db.attachments.find((x) => x.id === attId && !x.removedAt);
     if (!a) throw new ApiError(404, 'Attachment not found.');
     const task = findTask(db, a.taskId);
     assertCanViewTask(db, user, task);
-    if (a.uploadedBy !== user.id && !isOverseer(db, user, task)) throw new ApiError(403, 'Only the uploader or a task supervisor can remove this file.');
-    db.attachments = db.attachments.filter((x) => x.id !== attId);
-    const url = blobs.get(attId);
-    if (url) URL.revokeObjectURL(url);
-    blobs.delete(attId);
+    // D-33: like attaching, a supervisor must also hold create_tasks (KI-40).
+    if (a.uploadedBy !== user.id && !(isOverseer(db, user, task) && hasPerm(db, user, 'create_tasks'))) throw new ApiError(403, 'Only the uploader or a task supervisor can remove this file.');
+    a.removedAt = at; // D-31: hidden, never deleted
     logActivity(db, a.taskId, 'attachment_removed', user.id, `Removed ${a.name}`, at);
   });
 }
@@ -561,7 +595,7 @@ export function bulkAcknowledge(ids: string[]): { done: string[]; skipped: strin
 }
 
 /** Eligible assignees for the signed-in user, for pickers (shared rule, D-32: includes themselves). */
-export function assigneeOptions(): User[] | Promise<User[]> {
+export function assigneeOptions(): (User & { entityId?: string; load?: { loadPercent: number; band: string } })[] | Promise<(User & { entityId?: string; load?: { loadPercent: number; band: string } })[]> {
   if (BACKEND === 'server') return tasksServer.assigneeOptions();
   return read((db, user) => assignableUsers(db, user));
 }
@@ -575,10 +609,12 @@ export function parentOptions(): { id: string; title: string }[] | Promise<{ id:
 export interface TaskFormLookups {
   categories: string[];
   rules: RulesConfig;
-  teams: { id: string; name: string }[];
+  teams: { id: string; name: string; departmentId?: string }[];
+  /** Verticals (entities), for showing the derived entity (D-63). */
+  entities: { id: string; name: string }[];
 }
 
 export function taskFormLookups(): TaskFormLookups | Promise<TaskFormLookups> {
   if (BACKEND === 'server') return tasksServer.formLookups();
-  return read((db) => ({ categories: db.settings.categories, rules: db.rules, teams: db.teams }));
+  return read((db) => ({ categories: db.settings.categories, rules: db.rules, teams: db.teams, entities: db.departments }));
 }

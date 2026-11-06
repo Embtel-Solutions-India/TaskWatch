@@ -7,7 +7,7 @@ import type { TaskAction } from '../engine/workflow';
 import { http } from '../http';
 import { userStub } from './adminServer';
 import type { TaskView } from './base';
-import type { TaskDetail, TaskInput, TaskScope } from './tasks';
+import type { FinishReport, RateInput, ReviewInput, TaskDetail, TaskInput, TaskScope } from './tasks';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- server JSON is mapped field by field below */
 const S = (n: number | null | undefined): string | null => (n == null ? null : String(n));
@@ -59,6 +59,19 @@ export function toView(t: any): TaskView {
     team: t.team ? { id: String(t.team.id), name: t.team.name, departmentId: t.entityId, leadId: null } : undefined,
     actions: t.actions as TaskAction[],
     blockedReason: t.blockedReason ?? null,
+    // PERF
+    target: t.target ?? null,
+    unit: t.unit ?? null,
+    achieved: t.achieved ?? null,
+    result: t.result ?? null,
+    estimatedHours: t.estimatedHours ?? null,
+    purpose: t.purpose ?? null,
+    qualityScore: t.qualityScore ?? null,
+    outcomeScore: t.outcomeScore ?? null,
+    shortfallReason: t.shortfallReason ?? null,
+    shortfallAccepted: t.shortfallAccepted ?? null,
+    awaitingRating: t.awaitingRating === true,
+    escalatedToMe: t.myEscalation != null,
   };
 }
 
@@ -74,6 +87,7 @@ const KIND_TEXT: Record<string, string> = {
   escalation_acknowledged: 'Acknowledged the escalation',
   attachment_added: 'Attached a file',
   attachment_removed: 'Removed a file',
+  rated: 'Rated the task',
   extension_requested: 'Requested an extension',
   extension_decided: 'Decided an extension request',
   review_submitted: 'Submitted for review',
@@ -82,8 +96,8 @@ const KIND_TEXT: Record<string, string> = {
   comment_deleted: 'Deleted a comment',
 };
 
-/** One readable line per log row: the body if there is one, else what changed. */
-function activityText(a: any): string {
+/** One readable line per log row: the body if there is one, else what changed. Also used for dashboard feeds. */
+export function activityText(a: any): string {
   const from = a.before?.status;
   const to = a.after?.status;
   const statusChange = from && to && from !== to ? `${STATUS_LABEL[from as Task['status']] ?? from} → ${STATUS_LABEL[to as Task['status']] ?? to}` : '';
@@ -93,6 +107,7 @@ function activityText(a: any): string {
 }
 
 const ACTIVITY_TYPE: Record<string, ActivityType> = { comment_edited: 'edited', comment_deleted: 'edited', deescalation: 'escalated' };
+export const activityType = (kind: string): ActivityType => (ACTIVITY_TYPE[kind] ?? kind) as ActivityType;
 
 const escalationEvent = (taskId: string) => (e: any): EscalationEvent => ({
   id: String(e.id),
@@ -167,7 +182,7 @@ function detail(d: any): TaskDetail {
   return {
     task: toView(d.task),
     activities: d.activities
-      .map((a: any): Activity => ({ id: String(a.id), taskId, type: (ACTIVITY_TYPE[a.kind] ?? a.kind) as ActivityType, actorId: S(a.actorId), at: a.at, text: activityText(a) }))
+      .map((a: any): Activity => ({ id: String(a.id), taskId, type: activityType(a.kind), actorId: S(a.actorId), at: a.at, text: activityText(a) }))
       .reverse(),
     comments: d.comments.map((c: any): Comment => ({ id: String(c.id), taskId, authorId: String(c.authorId), body: c.body ?? '', at: c.at, editedAt: c.editedAt, parentId: S(c.parentId), deleted: c.deleted })),
     updates: updates.reverse(),
@@ -201,6 +216,10 @@ const taskBody = (i: TaskInput) => ({
   startDate: i.startDate || null,
   reviewRequired: i.reviewRequired,
   parentId: N(i.parentId),
+  target: i.target ? Number(i.target) : null,
+  unit: i.unit,
+  estimatedHours: i.estimatedHours ? Number(i.estimatedHours) : null,
+  purpose: i.purpose || null,
 });
 
 /** Multipart when files are attached; otherwise JSON. */
@@ -232,11 +251,16 @@ export const tasksServer = {
   publish: (id: string) => act(id, 'publish'),
   acknowledge: (id: string) => act(id, 'acknowledge'),
   start: (id: string) => act(id, 'start'),
-  progress: async (id: string, i: { message: string; percent: number; files: File[] }) => void (await post(`/tasks/${id}/progress`, { message: i.message, percent: i.percent }, i.files)),
+  progress: async (id: string, i: { message: string; percent: number; achieved?: number; files: File[] }) =>
+    void (await post(`/tasks/${id}/progress`, i.achieved !== undefined ? { message: i.message, achieved: i.achieved } : { message: i.message, percent: i.percent }, i.files)),
   block: (id: string, reason: string) => act(id, 'block', { reason }),
-  submit: async (id: string, i: { note: string; files: File[] }) => void (await post(`/tasks/${id}/submit`, { note: i.note }, i.files)),
-  complete: (id: string, note: string) => act(id, 'complete', { note }),
-  review: (id: string, i: { decision: 'approved' | 'changes_requested' | 'rejected'; comment: string }) => act(id, 'review', i),
+  submit: async (id: string, i: { note: string; files: File[] } & FinishReport) => {
+    const { files, ...body } = i;
+    await post(`/tasks/${id}/submit`, body, files);
+  },
+  complete: (id: string, note: string, report: FinishReport = {}) => act(id, 'complete', { note, ...report }),
+  review: (id: string, i: ReviewInput) => act(id, 'review', { ...i }),
+  rate: (id: string, i: RateInput) => act(id, 'rate', { ...i }),
   requestExtension: async (id: string, i: { requestedDate: string; requestedTime: string; reason: string; info: string }) =>
     void (await http('POST', `/tasks/${id}/extensions`, { requestedDate: i.requestedDate, ...(i.requestedTime ? { requestedTime: i.requestedTime } : {}), reason: i.reason, info: i.info })),
   decideExtension: async (extId: string, i: { approve: boolean; note: string }) => void (await http('POST', `/extensions/${extId}/decision`, i)),
@@ -282,15 +306,22 @@ export const tasksServer = {
     const r = await http<{ done: number[]; skipped: number[] }>('POST', '/tasks/bulk/acknowledge', { ids: ids.map(Number) });
     return { done: r.done.map(String), skipped: r.skipped.map(String) };
   },
-  assigneeOptions: async (): Promise<User[]> =>
-    (await http<any[]>('GET', '/tasks/options/assignees')).map((u) => ({ ...userStub(u), teamId: S(u.teamId), timezone: u.timeZone ?? '', openCount: u.openCount, teamName: u.teamName ?? null })),
+  assigneeOptions: async (): Promise<(User & { entityId?: string; load?: { loadPercent: number; band: string } })[]> =>
+    (await http<any[]>('GET', '/tasks/options/assignees')).map((u) => ({ ...userStub(u), entityId: u.entityId as string, load: u.load, teamId: S(u.teamId), timezone: u.timeZone ?? '', openCount: u.openCount, teamName: u.teamName ?? null })),
   formLookups: async () => {
     const [me, org] = await Promise.all([http<any>('GET', '/me'), http<any>('GET', '/org')]);
-    return { categories: me.settings.categories as string[], rules: me.rules, teams: (org.teams as any[]).map((t) => ({ id: String(t.id), name: t.name })) };
+    return {
+      categories: me.settings.categories as string[],
+      rules: me.rules,
+      teams: (org.teams as any[]).map((t) => ({ id: String(t.id), name: t.name, departmentId: t.entityId as string })),
+      entities: (org.entities as any[]).map((e) => ({ id: e.id as string, name: e.name as string })),
+    };
   },
   parentOptions: async () => (await http<any[]>('GET', '/tasks/options/parents')).map((t) => ({ id: String(t.id), title: t.title })),
   reviewQueue: async () => (await http<any[]>('GET', '/reviews')).map((x) => ({ task: toView(x.task), submission: review(x.submission) })),
   extensions: async () => (await http<any[]>('GET', '/extensions?status=all')).map((x) => ({ ext: extension(x.ext), task: toView(x.task), canDecide: x.canDecide })),
+  /** AUD-02 / D-16: run the audit-chain integrity check now (throttled on the server to once per 5 minutes). */
+  chainCheck: () => http<{ ok: boolean; breaks: unknown[] }>('POST', '/audit/chain-check'),
   audit: async (): Promise<(AuditRecord & { actorName: string | null })[]> =>
     (await http<{ items: any[] }>('GET', '/audit')).items.map((i) => ({
       id: i.id,

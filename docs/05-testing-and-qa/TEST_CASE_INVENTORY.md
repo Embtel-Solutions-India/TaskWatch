@@ -86,6 +86,7 @@
 | TC-TASK-08-01 | I | — | `GET` assignee options as CoS, LeadA, StaffA1 | CoS: every active user except self; LeadA: active transitive reports; StaffA1: none or 403. No archived users | TASK-08 | planned |
 | TC-TASK-09-01 | I | Tasks covering each case | `GET` list with each FR-10 view: All open, Escalated to me, Red, Blocked, Closed | Each view returns exactly the matching visible tasks; "Escalated to me" = tasks with an active escalation where the caller is a recipient | TASK-09, WO FR-10 | planned |
 | TC-TASK-10-01 | E | Tasks at on-track, L0, L1, L2, L3 | Open the task list | Stage stripe colour per task = on track / amber (L0–L1) / red (L2–L3) per D-49; summary tiles equal the counts of TC-TASK-09-01 | TASK-10, WO FR-10 | planned |
+| TC-TASK-10-02 | I | Tasks from earlier tests | StaffA1, LeadA, CoS `GET /api/tasks/summary` and `GET /api/tasks?scope=all&view=all` | open = onTrack + amber + red; each row's `stage` matches its level; closed/draft null | TASK-10-AC-1/2 | **passed 2026-11-07** (owner's `npm test`) |
 | TC-EXT-04-01 | I | LeadA overseer of a task | LeadA changes the due date directly with a reason, then tries again | First change logged with old date, new date and reason; second → 403 (lead once); MgrA and CoS can still change it | EXT-04, WO FR-5 | planned |
 
 ## WF: Task workflow
@@ -225,13 +226,19 @@ The FR-5 direct change is feature **EXT-04** (added after this inventory); its c
 
 | ID | Lvl | Pre | Steps | Expected | AC | Status |
 |---|---|---|---|---|---|---|
-| TC-DASH-01-01 | I | Tasks from earlier tests | CoS `GET /api/dashboard?days=30`; compare BAIS with SQL counts | open, red, amber and blocked equal | DASH-01, **AC-8** | existing test: "entity figures match a manual count", **passed 2026-11-04** |
+| TC-DASH-01-01 | I | Tasks from earlier tests | CoS `GET /api/reports/accountability?days=30` (was `/api/dashboard`, moved 2026-11-06); compare BAIS with SQL counts | open, red, amber and blocked equal | DASH-01, **AC-8** | existing test: "entity figures match a manual count", **passed 2026-11-04** |
 | TC-DASH-01-02 | M | Pilot env | Pick 20 tasks for one entity; count by hand | Dashboard equals the hand count | **AC-8** | planned |
 | TC-DASH-01-03 | I | Constructed history | Check by-person open, average first response, escalations, on-time % and by-entity longest silence | Equal to hand-computed values | DASH-01, WO FR-11 | planned |
 | TC-DASH-01-04 | E | A task at L3 | CoS and CEO open the dashboard | L3 banner at the top; not shown to MgrA for other lines | DASH-01, WO notifications table | planned |
-| TC-DASH-02-01 | I | — | LeadA opens team overview | Only LeadA's line | DASH-02 | planned |
-| TC-DASH-03-01 | I | — | StaffB1 `GET /api/dashboard` | `byPerson` contains only StaffB1 | DASH-03, **AC-6** | existing test: "a staff member’s dashboard only covers themselves", **passed 2026-11-04** |
-| TC-DASH-03-02 | I | — | MgrA dashboard | No EMB people or tasks in any aggregate | DASH-03, **AC-6** | planned |
+| TC-DASH-02-01 | I | — | MgrA `GET /api/team/overview`; StaffA1 the same | Exactly LeadA, StaffA1, StaffA2; open = SQL count; ≤14 workload rows sorted; no email; staff 403 | DASH-02 | **passed 2026-11-07** (owner's `npm test`) |
+| TC-DASH-03-01 | I | — | StaffB1 `GET /api/reports/accountability` (moved 2026-11-06) | `byPerson` contains only StaffB1 | DASH-03, **AC-6** | existing test: "a staff member’s dashboard only covers themselves", **passed 2026-11-04** |
+| TC-DASH-03-02 | I | — | LeadA `GET /api/dashboard` | Lead layout; every named task is visible to LeadA; workload only LeadA's reports; no staff/staffByRole/orgMini/recentAdmin | DASH-03, **AC-6** | **passed 2026-11-07** (owner's `npm test`) |
+| TC-DASH-03-03 | I | — | StaffB1 `GET /api/dashboard?range=7` | Staff layout; every task named anywhere is StaffB1's own; no org-wide fields; `me` present (PERF-07) | DASH-03-AC-1/3, **AC-6** | **passed 2026-11-07** (owner's `npm test`) |
+| TC-DASH-01-05 | I | Tasks from earlier tests | CoS `GET /api/dashboard?entity=BAIS` | BAIS active/overdue/escalated equal the list API and SQL counts | DASH-01-AC-7, **AC-8** | **passed 2026-11-07** (owner's `npm test`) |
+| TC-DASH-01-06 | I | — | LeadA `?entity=BAIS`, `?range=15`; CoS `?entity=NOPE`; CEO `?entity=EMB` | 403; 422 range; 422; 200 with EMB only | DASH-01 | **passed 2026-11-07** (owner's `npm test`) |
+| TC-DASH-03-04 | S | — | Search `client/src/features/dashboard/*` and `features/staff/TeamPage.tsx` for `getDb` / `mock/store` | No match | DASH-03-AC-4 | **passed 2026-11-06** |
+| TC-DASH-01-07 | E | Dev data | Open `/` as CoS, manager, lead, staff (server mode) and CoS (mock mode) | Each layout renders, no console errors; manager sees no L3 banner | DASH-01 | **passed 2026-11-06** (manual browser check) |
+| TC-DASH-U-01 | U | — | `server/test/insights.test.ts` | Health, attention, KPI, bucket, zone, layout boundaries (DASH-01-AC-2…5, AC-9) | DASH-01 | **passed 2026-11-06** (16/16) |
 
 ## RPT: Reports
 
@@ -283,10 +290,22 @@ The FR-5 direct change is feature **EXT-04** (added after this inventory); its c
 | TC-DLV-01-02 | I | L1 fired | Read the delivery log | One row per channel per recipient with status and template | DLV-01, **AC-5** | planned |
 | TC-DLV-02-01 | I | 40 deliveries for StaffA1 | My deliveries | Last 30, own only | DLV-02 | planned |
 | TC-SRCH-01-01 | I | Matching tasks in both lines | StaffA1 searches a shared word | Only visible tasks (≤8) and people (≤6) | SRCH-01, **AC-6** | planned |
-| TC-SRCH-01-02 | I | — | 100 searches in 10 s | Throttled (429, D-82) | SRCH-01, SEC-3 | planned |
-| TC-DEMO-01-01 | I | `NODE_ENV=production` | `POST /api/dev/clock` as CoS | 404/403; clock unchanged | DEMO-01, SEC-10 | planned |
-| TC-DEMO-01-02 | I | Dev, `DEMO_TOOLS=true` | `POST /api/dev/clock` as MgrA and as CoS | 403; 200 + `admin_log` `demo_clock` | DEMO-01 | planned |
-| TC-DEMO-01-03 | E | Production build | Sign in as each persona | No demo bar for anyone | DEMO-01 | planned |
+| TC-SRCH-01-02 | I | — | 100 searches in 10 s | Throttled (429, D-82) | SRCH-01, SEC-3 | planned (limit is 120/min) |
+| TC-SRCH-01-03 | I | — | StaffB1 searches another line's task id; LeadA searches the id, "Lead B", "Manager A", "a", "%", "", 101 chars | none; exact id first; none; found; ≤8/≤6 and no email; empty; empty; 422 | SRCH-01-AC-1…5, **AC-6** | **passed 2026-11-07** (owner's `npm test`) |
+| TC-DEMO-01-01 | I | `NODE_ENV=production` | `POST /api/dev/clock` as CoS | 404/403; clock unchanged | DEMO-01, SEC-10 | written 2026-11-07 (`api.test.ts` "Demo clock": 404 for CoS and manager with demo tools off; gate unit test `config.test.ts` covers `NODE_ENV=production`); not run (owner `npm test`) |
+| TC-DEMO-01-02 | I | Dev, `DEMO_TOOLS=true` | `POST /api/dev/clock` as MgrA and as CoS | 403; 200 + `admin_log` `demo_clock` | DEMO-01 | written 2026-11-07 (`api.test.ts`; also 422 for -1, 721, unknown field); not run (owner `npm test`) |
+| TC-DEMO-01-03 | E | Production build | Sign in as each persona | No demo bar for anyone | DEMO-01 | partial 2026-11-07: server-mode production build scanned, no "Act as", "Scenarios", "Reset data", "Expire session" or demo password; e2e sign-in pass not written |
+
+## PERF (Performance, progress & workload)
+
+| ID | Level | Given | When | Then | Covers | Status |
+|---|---|---|---|---|---|---|
+| TC-PERF-01 | U | Owner's worked example | `personScore` / `combine` | O 86.67, T 80, Q 90; scores 92.5 / 90.0 / 87.1 / 80.5; caps, exclusions, ranking floor and ties, periods, workload bands | PERF-04, PERF-06 | `server/test/performance.test.ts`, passing (agent) |
+| TC-PERF-02 | I | A lead creates tasks | estimate/purpose/unit/target rules; draft then publish; schedule carries fields | 422 per field; generated task carries the measures | PERF-01 | `api.test.ts` "PERF Task 2", owner green 2026-11-06 |
+| TC-PERF-03 | I | An assignee reports | achieved 70/150; complete short or late | progress 47, clock restarts; reason required | PERF-02 | "PERF Task 3", owner green |
+| TC-PERF-04 | I | Review and Rate | approve without scores; giver rates; others rate; accept a blocked delay | 422 / 200 / 403 / 200 | PERF-03 | "PERF Task 4", owner green |
+| TC-PERF-05 | I | Two teams | leaderboard, teams, breakdown, workload, picker | scores per formula; own team only for staff; 404 outside scope and across organizations; extended due moves period | PERF-05, PERF-06 | "PERF Task 5", owner green (teams assertions added in Batch B: re-run) |
+| TC-PERF-06 | E (manual) | Maria, Priya, Sofia on dev | create → report → complete short → rate; open pages | tag, facts, activity, board, breakdown exclusions, workload; Sofia sees own team only | PERF-01…06 | browser-checked 2026-11-06 |
 
 ## Cross-cutting (PRD C-1…C-7, NFR SEC)
 

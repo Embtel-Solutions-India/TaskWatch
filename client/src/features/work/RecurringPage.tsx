@@ -6,6 +6,7 @@ import { useAction, useApi, useMe } from '../../hooks';
 import { deleteRecurrence, listRecurrences, saveRecurrence, toggleRecurrence, type RecurrenceInput, type RecurrenceRow } from '../../services/api/admin';
 import { assigneeOptions, taskFormLookups } from '../../services/api/tasks';
 import { describeRecurrence, isoDay } from '../../services/engine/recurrence';
+import { SCHEDULE_TITLE_MAX } from '@taskwatch/shared/recurrence';
 import { BACKEND } from '../../services/http';
 import { now } from '../../services/mock/store';
 import type { Frequency, Priority } from '../../types';
@@ -110,8 +111,8 @@ function RecurrenceDialog({ row, onClose }: { row: Row | null; onClose: () => vo
   const categories = useApi(['task-form-lookups'], taskFormLookups).data?.categories ?? [];
   const [f, setF] = useState<RecurrenceInput>(
     row
-      ? { title: row.title, description: row.description, category: row.category, priority: row.priority, assigneeId: row.assigneeId, teamId: row.teamId, reviewRequired: row.reviewRequired, frequency: row.frequency, interval: row.interval, weekdays: row.weekdays, startDate: row.startDate, endDate: row.endDate, dueHour: row.dueHour }
-      : { title: '', description: '', category: '', priority: 'normal', assigneeId: '', teamId: null, reviewRequired: false, frequency: 'weekly', interval: 1, weekdays: [1], startDate: isoDay(now() + 86_400_000), endDate: null, dueHour: 17 },
+      ? { title: row.title, description: row.description, category: row.category, priority: row.priority, assigneeId: row.assigneeId, teamId: row.teamId, reviewRequired: row.reviewRequired, frequency: row.frequency, interval: row.interval, weekdays: row.weekdays, startDate: row.startDate, endDate: row.endDate, dueHour: row.dueHour, target: row.target ?? null, unit: row.unit ?? null, estimatedHours: row.estimatedHours ?? null, purpose: row.purpose ?? null }
+      : { title: '', description: '', category: '', priority: 'normal', assigneeId: '', teamId: null, reviewRequired: false, frequency: 'weekly', interval: 1, weekdays: [1], startDate: isoDay(now() + 86_400_000), endDate: null, dueHour: 17, target: null, unit: null, estimatedHours: null, purpose: null },
   );
   const set = <K extends keyof RecurrenceInput>(k: K, v: RecurrenceInput[K]) => setF((x) => ({ ...x, [k]: v }));
   const save = useAction(saveRecurrence, { success: row ? 'Schedule updated' : 'Schedule created', onSuccess: onClose });
@@ -134,7 +135,7 @@ function RecurrenceDialog({ row, onClose }: { row: Row | null; onClose: () => vo
     >
       <form id="f-rec" className="stack" noValidate onSubmit={(ev) => (ev.preventDefault(), save.run(row?.id ?? null, f))}>
         <Field label="Title" required htmlFor="rc-title" error={e.title}>
-          <Input id="rc-title" value={f.title} onChange={(x) => set('title', x.target.value)} invalid={!!e.title} />
+          <Input id="rc-title" value={f.title} onChange={(x) => set('title', x.target.value)} invalid={!!e.title} maxLength={SCHEDULE_TITLE_MAX} />
         </Field>
         <Field label="Template description" htmlFor="rc-desc">
           <Textarea id="rc-desc" rows={2} value={f.description} onChange={(x) => set('description', x.target.value)} />
@@ -201,6 +202,24 @@ function RecurrenceDialog({ row, onClose }: { row: Row | null; onClose: () => vo
             {e.weekdays && <span className="field-msg">{e.weekdays}</span>}
           </fieldset>
         )}
+        <div className="grid-2">
+          <Field label="Target" htmlFor="rc-target" error={e.target} hint="Optional.">
+            <Input id="rc-target" type="number" min={0} step="any" value={f.target ?? ''} onChange={(x) => set('target', x.target.value ? Number(x.target.value) : null)} />
+          </Field>
+          <Field label="Unit" htmlFor="rc-unit" error={e.unit}>
+            <Input id="rc-unit" maxLength={40} value={f.unit ?? ''} onChange={(x) => set('unit', x.target.value || null)} />
+          </Field>
+          <Field label="Estimated hours" required htmlFor="rc-est" error={e.estimatedHours}>
+            <Input id="rc-est" type="number" min={0.25} max={200} step={0.25} value={f.estimatedHours ?? ''} onChange={(x) => set('estimatedHours', x.target.value ? Number(x.target.value) : null)} />
+          </Field>
+          <Field label="Purpose" required htmlFor="rc-purpose" error={e.purpose}>
+            <Select id="rc-purpose" value={f.purpose ?? ''} onChange={(x) => set('purpose', (x.target.value || null) as RecurrenceInput['purpose'])}>
+              <option value="">Choose…</option>
+              <option value="revenue">Revenue-oriented</option>
+              <option value="support">Support</option>
+            </Select>
+          </Field>
+        </div>
         <Checkbox label="Review required" checked={f.reviewRequired} onChange={(x) => set('reviewRequired', x.target.checked)} />
         <p className="muted small">{describeRecurrence(f)}. {BACKEND === 'server' ? 'Each task is due at that hour in the assignee’s time zone.' : 'Times are interpreted in UTC in this prototype.'}</p>
       </form>

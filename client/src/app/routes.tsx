@@ -1,4 +1,5 @@
 // Central route table. Navigation, breadcrumbs and route guards are all derived from it.
+import { LeaderboardPage, PersonPerformancePage, WorkloadPage } from '../features/performance/PerformancePages';
 import type { ReactNode } from 'react';
 import type { Db, Permission, User } from '../types';
 import { hasPerm, reportsOf } from '../services/authz/permissions';
@@ -9,7 +10,7 @@ import { PoliciesPage, RolesPage, SettingsPage } from '../features/admin/AdminPa
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 import { NotificationsPage } from '../features/notifications/NotificationsPage';
 import { OrgPage } from '../features/org/OrgPage';
-import { ReportPage, ReportsIndexPage } from '../features/reports/ReportsPages';
+import { AccountabilityPage, ReportPage, ReportsIndexPage } from '../features/reports/ReportsPages';
 import { StaffDirectoryPage, StaffProfilePage } from '../features/staff/StaffPages';
 import { TeamPage } from '../features/staff/TeamPage';
 import { CalendarPage } from '../features/tasks/CalendarPage';
@@ -33,18 +34,23 @@ export interface RouteDef {
   nav?: { section: NavSection; icon: string; label?: string; badge?: BadgeKey };
   /**
    * Server mode: the screen is connected to the real API (T-3.8 onward). `true` = any signed-in person (the API
-   * scopes the data); a permission = only those holding it, checked against /api/me. Absent = not connected yet.
+   * scopes the data); a permission (or a list: any of them) = only those holding it, checked against /api/me. Absent =
+   * not connected yet.
    */
-  server?: true | Permission;
+  server?: true | Permission | readonly Permission[];
 }
 
-const supervises: Allow = (db, u) => hasPerm(db, u, 'view_tasks') && (u.role === 'cos' || reportsOf(db, u.id).size > 0);
+export const supervises: Allow = (db, u) => hasPerm(db, u, 'view_tasks') && (u.role === 'cos' || reportsOf(db, u.id).size > 0);
+/** Server mode: the same gate from /api/me (the mock store does not know server people). */
+export const supervisesOnServer = (permissions: readonly Permission[], roles: readonly string[], reportCount: number) =>
+  permissions.includes('view_tasks') && (roles.includes('cos') || reportCount > 0);
 const creates: Allow = (db, u) => hasPerm(db, u, 'create_tasks');
-const reports: Allow = (db, u) => hasPerm(db, u, 'view_team_reports') || hasPerm(db, u, 'view_org_reports');
+const REPORT_PERMS = ['view_team_reports', 'view_org_reports'] as const;
+const reports: Allow = (db, u) => REPORT_PERMS.some((p) => hasPerm(db, u, p));
 const perm = (p: Parameters<typeof hasPerm>[2]): Allow => (db, u) => hasPerm(db, u, p);
 
 export const ROUTES: RouteDef[] = [
-  { path: '/', title: 'Overview', element: <DashboardPage />, nav: { section: 'General', icon: 'home' } },
+  { path: '/', title: 'Overview', element: <DashboardPage />, server: true, nav: { section: 'General', icon: 'home' } },
   { path: '/tasks/mine', title: 'My Tasks', element: <TaskListPage scope="mine" />, server: true, nav: { section: 'General', icon: 'check-square', badge: 'mine' } },
   { path: '/tasks/assigned-by-me', title: 'Assigned by Me', element: <TaskListPage scope="assigned_by_me" />, allow: creates, server: true, nav: { section: 'General', icon: 'send' } },
   { path: '/tasks/team', title: 'Team Tasks', element: <TaskListPage scope="team" />, allow: supervises, server: true, nav: { section: 'General', icon: 'layers' } },
@@ -54,13 +60,17 @@ export const ROUTES: RouteDef[] = [
   { path: '/tasks/:id', title: 'Task', element: <TaskDetailPage />, server: true, parent: '/tasks/mine' },
   { path: '/tasks/:id/edit', title: 'Edit task', element: <EditTaskPage />, server: true, parent: '/tasks/:id' },
 
-  { path: '/team', title: 'Team Overview', element: <TeamPage />, allow: supervises, nav: { section: 'Management', icon: 'users' } },
+  { path: '/team', title: 'Team Overview', element: <TeamPage />, allow: supervises, server: 'view_tasks', nav: { section: 'Management', icon: 'users' } },
   { path: '/escalations', title: 'Escalations', element: <EscalationsPage />, allow: supervises, server: 'view_tasks', nav: { section: 'Management', icon: 'alert', badge: 'escalations' } },
   { path: '/reviews', title: 'Reviews', element: <ReviewsPage />, allow: perm('review_tasks'), server: 'review_tasks', nav: { section: 'Management', icon: 'review', badge: 'reviews' } },
   { path: '/extensions', title: 'Extensions', element: <ExtensionsPage />, allow: supervises, server: true, nav: { section: 'Management', icon: 'clock', badge: 'extensions' } },
+  { path: '/performance', title: 'Team Performance', element: <LeaderboardPage />, server: true, nav: { section: 'Management', icon: 'chart', label: 'Performance' } },
+  { path: '/performance/people/:id', title: 'Performance', element: <PersonPerformancePage />, server: true, parent: '/performance' },
+  { path: '/workload', title: 'Workload', element: <WorkloadPage />, server: true, nav: { section: 'Management', icon: 'users' } },
   { path: '/recurring', title: 'Recurring Tasks', element: <RecurringPage />, allow: (db, u) => creates(db, u) && hasPerm(db, u, 'assign_tasks'), server: 'create_tasks', nav: { section: 'Management', icon: 'repeat' } },
-  { path: '/reports', title: 'Accountability Reports', element: <ReportsIndexPage />, allow: reports, nav: { section: 'Management', icon: 'chart', label: 'Reports' } },
-  { path: '/reports/:reportId', title: 'Report', element: <ReportPage />, allow: reports, parent: '/reports' },
+  { path: '/reports', title: 'Accountability Reports', element: <ReportsIndexPage />, allow: reports, server: REPORT_PERMS, nav: { section: 'Management', icon: 'chart', label: 'Reports' } },
+  { path: '/reports/entities', title: 'Entity & person accountability', element: <AccountabilityPage />, allow: reports, server: REPORT_PERMS, parent: '/reports' },
+  { path: '/reports/:reportId', title: 'Report', element: <ReportPage />, allow: reports, server: REPORT_PERMS, parent: '/reports' },
 
   { path: '/admin/staff', title: 'Staff Management', element: <StaffDirectoryPage />, allow: perm('manage_staff'), server: 'manage_staff', nav: { section: 'Administration', icon: 'users', label: 'Staff' } },
   { path: '/admin/staff/:id', title: 'Staff profile', element: <StaffProfilePage />, parent: '/admin/staff', server: true },

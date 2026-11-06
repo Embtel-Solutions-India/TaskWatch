@@ -157,12 +157,14 @@ function localIn(hoursFromNow: number, tz: string): string {
 
 /** TASK-01 body fields for a local due moment 'YYYY-MM-DDTHH:mm' (the caller's zone, D-5). */
 const due = (local: string) => ({ dueDate: local.slice(0, 10), dueTime: local.slice(11, 16) });
+/** PERF: every new or edited (non-draft) task names its estimated effort and purpose. */
+const M = { estimatedHours: 1, purpose: 'support' } as const;
 
 /** Creates a task through the API. The entity is derived from the assignee (D-63); `_entityId` is kept for the call sites. */
 async function newTask(by: number, to: number, priority: string, dueInHours: number, _entityId = 'BAIS', title = 'Test task'): Promise<number> {
   const c = await as(by);
   const tz = (await getDirectory(1)).must(by).timeZone;
-  const res = await c.post('/api/tasks', { title, category: 'Operations', assigneeId: to, priority, ...due(localIn(dueInHours, tz)), instructions: '' });
+  const res = await c.post('/api/tasks', { ...M, title, category: 'Operations', assigneeId: to, priority, ...due(localIn(dueInHours, tz)), instructions: '' });
   assert.equal(res.status, 201, JSON.stringify(res.body));
   return res.body.task.id;
 }
@@ -423,11 +425,10 @@ describe('Password sign-in (T-2.1, AUTH-01b)', () => {
     assert.equal((await anon('/auth/password/reset', { token, password: 'newpassword9', confirm: 'newpassword9' })).status, 400);
   });
 
-  it('AUTH-05: reset access needs manage_staff, sends a link and ends sessions; never for oneself; a CoS only by a CoS', async () => {
+  it('AUTH-05: reset access needs manage_staff, sends a link and ends sessions; a CoS only by a CoS; D-98 scope', async () => {
     await giveUser(74, ['manager']);
     const held = (await login('auth74@example.com', PW)).cookie;
     assert.equal((await (await as(U.leadA)).post('/api/people/74/reset-access')).status, 403, 'lead lacks manage_staff');
-    assert.equal((await (await as(U.cos)).post(`/api/people/${U.cos}/reset-access`)).status, 422, 'not for oneself');
     const link = await captureResetLink(async () => assert.equal((await (await as(U.cos)).post('/api/people/74/reset-access')).status, 200));
     assert.ok(link);
     const { rows } = await pool.query(`select created_by from password_reset_tokens where user_id = 74`);
@@ -439,6 +440,13 @@ describe('Password sign-in (T-2.1, AUTH-01b)', () => {
       assert.equal((await (await as(U.cos)).put('/api/roles/manager', { permissions: [...DEFAULT_ROLE_PERMISSIONS.manager, 'manage_staff'] })).status, 200);
       const r = await (await as(U.mgrA)).post(`/api/people/${U.cos}/reset-access`);
       assert.deepEqual({ s: r.status, e: r.body.error }, { s: 403, e: 'Only a Chief of Staff can reset another Chief of Staff.' });
+      // D-98: a non-CoS may reset only themselves and people below them.
+      const other = await (await as(U.mgrA)).post(`/api/people/${U.staffB1}/reset-access`);
+      assert.deepEqual({ s: other.status, e: other.body.error }, { s: 403, e: 'You can only reset access for yourself or people below you in the reporting line.' });
+      assert.equal((await (await as(U.mgrA)).post(`/api/people/${U.staffA2}/reset-access`)).status, 200, 'below them');
+      sessions.delete(U.staffA2); // their sessions were ended
+      assert.equal((await (await as(U.mgrA)).post(`/api/people/${U.mgrA}/reset-access`)).status, 200, 'themselves (owner, 2026-11-06)');
+      sessions.delete(U.mgrA);
     } finally {
       await resetRoleMatrix();
     }
@@ -543,12 +551,12 @@ describe('Security', () => {
     const res = await (await as(U.leadA)).req('POST', `/api/tasks/${id}/updates`, { body: 'Not my task' });
     assert.equal(res.status, 403, 'a lead cannot post an assignee update');
     const staff = await as(U.staffA1);
-    assert.equal((await staff.post('/api/tasks', { title: 'Peer task', category: 'Operations', assigneeId: U.staffA2, priority: 'low', ...due(localIn(10, 'Asia/Kolkata')) })).status, 403);
+    assert.equal((await staff.post('/api/tasks', { ...M, title: 'Peer task', category: 'Operations', assigneeId: U.staffA2, priority: 'low', ...due(localIn(10, 'Asia/Kolkata')) })).status, 403);
   });
 
   it('rejects A-numbers and other ID numbers in task text', async () => {
     const c = await as(U.leadA);
-    const res = await c.post('/api/tasks', { title: 'Biometrics for A123-456-789', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due(localIn(30, 'Asia/Kolkata')) });
+    const res = await c.post('/api/tasks', { ...M, title: 'Biometrics for A123-456-789', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due(localIn(30, 'Asia/Kolkata')) });
     assert.equal(res.status, 422);
     assert.match(res.body.error, /A-number/);
   });
@@ -751,8 +759,8 @@ describe('Time zones and quiet hours', () => {
     setNow(new Date('2026-11-20T03:00:00Z'));
     const lead = await as(U.leadA); // IST
     const cos = await as(U.cos); // PT
-    const a = await lead.post('/api/tasks', { title: 'IST entry', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due('2026-11-25T17:30') });
-    const b = await cos.post('/api/tasks', { title: 'PT entry', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due('2026-11-25T04:00') });
+    const a = await lead.post('/api/tasks', { ...M, title: 'IST entry', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due('2026-11-25T17:30') });
+    const b = await cos.post('/api/tasks', { ...M, title: 'PT entry', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due('2026-11-25T04:00') });
     const { rows } = await pool.query('select due_at from tasks where id = any($1) order by id', [[a.body.task.id, b.body.task.id]]);
     assert.equal(rows[0].due_at.toISOString(), '2026-11-25T12:00:00.000Z');
     assert.equal(rows[1].due_at.toISOString(), '2026-11-25T12:00:00.000Z');
@@ -786,8 +794,8 @@ describe('Time zones and quiet hours', () => {
 });
 
 describe('Dashboards', () => {
-  it('entity figures match a manual count', async () => {
-    const res = await (await as(U.cos)).get('/api/dashboard?days=30');
+  it('FR-11 accountability: entity figures match a manual count', async () => {
+    const res = await (await as(U.cos)).get('/api/reports/accountability?days=30');
     assert.equal(res.status, 200);
     const bais = res.body.byEntity.find((e: any) => e.entityId === 'BAIS');
     const { rows } = await pool.query(
@@ -796,17 +804,201 @@ describe('Dashboards', () => {
          from tasks where entity_id = 'BAIS'`,
     );
     assert.deepEqual([bais.open, bais.red, bais.amber, bais.blocked], [rows[0].open, rows[0].red, rows[0].amber, rows[0].blocked]);
-    const csv = await fetch(`${base}/api/dashboard/export.csv?days=30`, { headers: { cookie: (await as(U.cos)).cookie } });
+    const csv = await fetch(`${base}/api/reports/accountability/export.csv?days=30`, { headers: { cookie: (await as(U.cos)).cookie } });
     assert.equal(csv.status, 200);
     assert.match(await csv.text(), /By entity/);
-    const pdf = await fetch(`${base}/api/dashboard/export.pdf?days=30`, { headers: { cookie: (await as(U.cos)).cookie } });
+    const pdf = await fetch(`${base}/api/reports/accountability/export.pdf?days=30`, { headers: { cookie: (await as(U.cos)).cookie } });
     assert.equal(pdf.headers.get('content-type'), 'application/pdf');
     assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
   });
 
-  it('a staff member’s dashboard only covers themselves', async () => {
-    const res = await (await as(U.staffB1)).get('/api/dashboard?days=30');
-    assert.deepEqual(res.body.byPerson.map((p: any) => p.userId), [U.staffB1]);
+  it('FR-11 accountability: a lead’s report covers only themselves and their line; staff get 403 (RPT-01-AC-1, D-123)', async () => {
+    const res = await (await as(U.leadB)).get('/api/reports/accountability?days=30');
+    assert.equal(res.status, 200);
+    for (const p of res.body.byPerson) assert.ok(![U.mgrB, U.leadA, U.staffA1, U.cos].includes(p.userId), `person ${p.userId}`);
+    assert.equal((await (await as(U.staffB1)).get('/api/reports/accountability?days=30')).status, 403);
+  });
+
+  it('RPT-01…04: report scope, options, payload, CSV and validation', async () => {
+    const staff = await as(U.staffB1);
+    for (const path of ['/api/reports', '/api/reports/scope', '/api/reports/options', '/api/reports/completion/export.csv', '/api/reports/accountability/export.pdf']) {
+      assert.equal((await staff.get(path)).status, 403, path);
+    }
+    const lead = await as(U.leadB);
+    const cos = await as(U.cos);
+    assert.deepEqual((await lead.get('/api/reports/scope')).body, { scope: 'team' });
+    assert.deepEqual((await cos.get('/api/reports/scope')).body, { scope: 'org' });
+
+    // RPT-04-AC-1: a lead's options are their line (plus themselves as giver) and those people's teams.
+    const opts = (await lead.get('/api/reports/options')).body;
+    const ppl = opts.people.map((p: any) => p.id);
+    const giv = opts.givers.map((p: any) => p.id);
+    assert.ok(ppl.includes(U.staffB1) && !ppl.includes(U.staffA1) && !ppl.includes(U.leadB), 'people');
+    assert.ok(giv.includes(U.leadB) && !giv.includes(U.mgrB) && !giv.includes(U.staffB1), 'givers');
+
+    // RPT-01-AC-2: whatever filter is sent, a lead never gets a task outside what they may see.
+    const { rows: visible } = await pool.query(`select id from tasks where status <> 'draft' and (assignee_id = any($1) or assigner_id = $2 or created_by = $2 or reviewer_id = $2)`, [[U.leadB, U.staffB1], U.leadB]);
+    const ids = new Set(visible.map((r) => r.id));
+    for (const q of ['', `?userId=${U.staffA1}`, '?from=2020-01-01']) {
+      const r = await lead.get(`/api/reports${q}`);
+      assert.equal(r.status, 200, q);
+      for (const t of r.body.overdue) assert.ok(ids.has(t.id), `task ${t.id} via ${q}`);
+      if (q.includes('userId')) assert.equal(r.body.summary.openNow, 0);
+    }
+
+    // RPT-02-AC-1 (partial): org Open now equals a count of open non-draft tasks.
+    const org = (await cos.get('/api/reports?from=2020-01-01')).body;
+    const { rows } = await pool.query(`select count(*)::int as n from tasks where status in ('assigned','in_progress','blocked','changes_requested','reopened','submitted')`);
+    assert.equal(org.summary.openNow, rows[0].n);
+    assert.equal(org.scope, 'org');
+    // RPT-02-AC-6: no contact details anywhere in the payload.
+    assert.doesNotMatch(JSON.stringify(org), /@example\.com|\+1415|"email"|"phone"/);
+
+    // RPT-02-AC-2 and filter validation.
+    const bad = await cos.get('/api/reports?from=2026-11-05&to=2026-11-01');
+    assert.equal(bad.status, 422);
+    assert.ok(bad.body.fields.from);
+    assert.equal((await cos.get('/api/reports?from=nope')).status, 422);
+    assert.equal((await cos.get('/api/reports?teamId=999999')).status, 422);
+    assert.equal((await cos.get('/api/reports?surprise=1')).status, 422);
+    assert.equal((await cos.get('/api/reports/accountability?days=8')).status, 422);
+    // RPT-02-AC-5
+    assert.equal((await cos.get('/api/reports/unknown/export.csv')).status, 404);
+
+    // RPT-03-AC-1: CSV columns and numbers equal the screen.
+    const csv = await fetch(`${base}/api/reports/teams/export.csv?from=2020-01-01`, { headers: { cookie: cos.cookie } });
+    assert.equal(csv.status, 200);
+    assert.match(csv.headers.get('content-disposition') ?? '', /taskwatch-report-teams-\d{4}-\d{2}-\d{2}\.csv/);
+    const lines = (await csv.text()).replace(/^\uFEFF/, '').trim().split('\n');
+    assert.equal(lines[0], 'Team,Created,Completed,Completion,On-time,Open now,Overdue now,Escalations');
+    assert.equal(lines.length - 1, org.teamRows.length);
+  });
+
+  /** Every task a dashboard payload names: briefs ({title, assignee}) and `taskId` fields, wherever they sit. */
+  const namedTasks = (body: unknown) => {
+    const out: { id: number; assigneeId?: number }[] = [];
+    const walk = (v: unknown): void => {
+      if (Array.isArray(v)) return v.forEach(walk);
+      if (!v || typeof v !== 'object') return;
+      const o = v as Record<string, any>;
+      if ('title' in o && o.assignee && typeof o.id === 'number') out.push({ id: o.id, assigneeId: o.assignee.id });
+      if (typeof o.taskId === 'number') out.push({ id: o.taskId });
+      Object.values(o).forEach(walk);
+    };
+    walk(body);
+    return out;
+  };
+  const OPEN_STATUSES = ['assigned', 'in_progress', 'blocked', 'changes_requested', 'reopened', 'submitted'];
+
+  it('DASH-01-AC-7 (WO AC-8): the executive dashboard’s entity counts match a manual count', async () => {
+    await newTask(U.leadA, U.staffA1, 'high', 30, 'BAIS', 'Dashboard count sample');
+    const cos = await as(U.cos);
+    const res = await cos.get('/api/dashboard?range=30&entity=BAIS');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.layout, 'executive');
+    const bais = res.body.entities.find((e: any) => e.id === 'BAIS');
+    const rows = (await cos.get('/api/tasks?scope=all&view=all')).body.items.filter((t: any) => t.entityId === 'BAIS' && OPEN_STATUSES.includes(t.status));
+    assert.deepEqual(
+      [bais.active, bais.overdue, bais.escalated],
+      [rows.length, rows.filter((t: any) => t.overdue).length, rows.filter((t: any) => t.level >= 1).length],
+    );
+    const { rows: sql } = await pool.query(`select count(*)::int n from tasks where entity_id = 'BAIS' and ${OPEN}`);
+    assert.equal(bais.active, sql[0].n);
+    const baisIds = new Set((await cos.get('/api/tasks?scope=all&view=all')).body.items.filter((t: any) => t.entityId === 'BAIS').map((t: any) => t.id));
+    assert.ok(namedTasks({ attention: res.body.attention, entities: res.body.entities }).every((t) => baisIds.has(t.id)), 'the entity filter holds');
+  });
+
+  it('DASH-03-AC-1/3 (WO AC-6): a staff dashboard names only that person’s own tasks', async () => {
+    await newTask(U.leadB, U.staffB1, 'normal', 10, 'EMB', 'Staff B1 dashboard task');
+    const staff = await as(U.staffB1);
+    const res = await staff.get('/api/dashboard?range=7');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.layout, 'staff');
+    assert.equal(res.body.scopeLabel, 'Your assigned work');
+    const visible = new Set((await staff.get('/api/tasks?scope=all&view=all')).body.items.map((t: any) => t.id));
+    const named = namedTasks(res.body);
+    assert.ok(named.length > 0, 'the staff dashboard shows the person’s task');
+    for (const t of named) {
+      assert.ok(visible.has(t.id), `task ${t.id} is visible to the staff member`);
+      if (t.assigneeId !== undefined) assert.equal(t.assigneeId, U.staffB1);
+    }
+    for (const k of ['staff', 'staffByRole', 'orgMini', 'recentAdmin', 'workload']) assert.equal(res.body[k], undefined, `no ${k} for staff`);
+    assert.ok(res.body.me && 'loadPercent' in res.body.me, 'PERF-07 tiles');
+  });
+
+  it('DASH-01: only organization-wide viewers filter by entity; range and entity are validated', async () => {
+    const lead = await as(U.leadA);
+    assert.deepEqual((await lead.get('/api/dashboard?entity=BAIS')).body, { error: "You don't have permission to filter by entity." });
+    const bad = await lead.get('/api/dashboard?range=15');
+    assert.equal(bad.status, 422);
+    assert.equal(bad.body.fields.range, 'Choose 7, 30 or 90 days.');
+    assert.equal((await (await as(U.cos)).get('/api/dashboard?entity=NOPE')).status, 422);
+    const ceo = await (await as(U.ceo)).get('/api/dashboard?entity=EMB');
+    assert.equal(ceo.status, 200, 'D-33: the CEO is organization-wide');
+    assert.deepEqual(ceo.body.entities.map((e: any) => e.id), ['EMB']);
+  });
+
+  it('DASH-03-AC-2: a lead’s dashboard covers their line and carries no organization-wide staff figures', async () => {
+    const lead = await as(U.leadA);
+    const res = await lead.get('/api/dashboard');
+    assert.equal(res.body.layout, 'lead');
+    assert.equal(res.body.scopeLabel, 'Your reporting line · 2 people');
+    for (const k of ['staff', 'staffByRole', 'orgMini', 'recentAdmin']) assert.equal(res.body[k], undefined);
+    assert.equal(res.body.l3Banner, null, 'DASH-01-AC-6: the L3 banner is for the Founder’s Office only');
+    assert.ok(res.body.workload.every((w: any) => [U.staffA1, U.staffA2].includes(w.id)));
+    const visible = new Set((await lead.get('/api/tasks?scope=all&view=all')).body.items.map((t: any) => t.id));
+    assert.ok(namedTasks(res.body).every((t) => visible.has(t.id)));
+  });
+
+  it('DASH-02: the team overview lists exactly the transitive reports; staff get 403', async () => {
+    const mgr = await (await as(U.mgrA)).get('/api/team/overview');
+    assert.equal(mgr.status, 200);
+    assert.deepEqual(mgr.body.people.map((p: any) => p.id).sort(), [U.leadA, U.staffA1, U.staffA2]);
+    assert.equal(mgr.body.directCount, 1);
+    assert.ok(mgr.body.workload.length <= 14);
+    assert.ok(mgr.body.workload.every((w: any, i: number, a: any[]) => i === 0 || a[i - 1].open >= w.open), 'sorted by open tasks');
+    const { rows } = await pool.query(`select count(*)::int n from tasks where assignee_id = any($1) and ${OPEN}`, [[U.leadA, U.staffA1, U.staffA2]]);
+    assert.equal(mgr.body.stats.open, rows[0].n);
+    assert.ok(!JSON.stringify(mgr.body).includes('@example.com'), 'no contact details');
+    assert.deepEqual((await (await as(U.staffA1)).get('/api/team/overview')).body, { error: "You don't have permission to view your team." });
+  });
+
+  it('TASK-10: summary tiles add up, and every row carries its stage', async () => {
+    for (const who of [U.staffA1, U.leadA, U.cos]) {
+      const c = await as(who);
+      const s = (await c.get('/api/tasks/summary')).body;
+      assert.equal(s.open, s.onTrack + s.amber + s.red, `TASK-10-AC-2 for user ${who}`);
+      for (const t of (await c.get('/api/tasks?scope=all&view=all')).body.items as any[]) {
+        const expected = ['completed', 'cancelled', 'draft'].includes(t.status) ? null : t.level >= 2 ? 'red' : t.level >= 0 ? 'amber' : 'on_track';
+        assert.equal(t.stage, expected, `stage of task ${t.id}`);
+      }
+    }
+  });
+
+  it('SRCH-01: scoped to what the caller may see, capped, without contact details', async () => {
+    const id = await newTask(U.leadA, U.staffA1, 'low', 72, 'BAIS', 'Search target alpha');
+    const staffB = await as(U.staffB1);
+    assert.deepEqual((await staffB.get(`/api/search?q=${id}`)).body.tasks, [], 'SRCH-01-AC-1: another team’s task id finds nothing');
+    const lead = await as(U.leadA);
+    assert.equal((await lead.get(`/api/search?q=TW-${id}`)).body.tasks[0].id, id, 'exact id first');
+    assert.equal((await lead.get('/api/search?q=search%20target')).body.tasks[0].title, 'Search target alpha');
+
+    const names = async (c: Client, q: string) => (await c.get(`/api/search?q=${encodeURIComponent(q)}`)).body.people.map((p: any) => p.name);
+    assert.deepEqual(await names(lead, 'Lead B'), [], 'SRCH-01-AC-3: a peer lead is out of scope');
+    assert.deepEqual(await names(lead, 'Manager A'), ['Manager A'], 'one’s own manager is found');
+
+    const all = await lead.get('/api/search?q=a');
+    assert.ok(all.body.tasks.length <= 8 && all.body.people.length <= 6, 'SRCH-01-AC-2');
+    assert.ok(!JSON.stringify(all.body).includes('@example.com'), 'SRCH-01-AC-5: no email');
+    assert.ok(!all.body.people.some((p: any) => 'email' in p || 'phone' in p));
+
+    const pct = (await lead.get('/api/search?q=%25')).body;
+    assert.deepEqual([pct.tasks, pct.people, pct.teams], [[], [], []], 'SRCH-01-AC-4: % is literal');
+    assert.deepEqual((await lead.get('/api/search?q=')).body, { tasks: [], people: [], teams: [] });
+    const long = await lead.get(`/api/search?q=${'x'.repeat(101)}`);
+    assert.equal(long.status, 422);
+    assert.equal(long.body.fields.q, 'Search text is too long.');
+    assert.deepEqual((await (await as(U.staffA1)).get('/api/search?q=a')).body.teams, [], 'teams only for those who supervise');
   });
 });
 
@@ -820,7 +1012,7 @@ describe('Recurring schedules (REC-01…04)', () => {
   };
   const schedule = (o: Record<string, unknown> = {}) => ({
     title: 'Daily bank reconciliation', category: 'Operations', priority: 'normal', assigneeId: U.staffA1,
-    frequency: 'daily', interval: 1, startDate: DateTime.fromJSDate(now, { zone: IST }).toISODate(), dueHour: 17, ...o,
+    frequency: 'daily', interval: 1, startDate: DateTime.fromJSDate(now, { zone: IST }).toISODate(), dueHour: 17, ...M, ...o,
   });
   const generated = async (sid: number) =>
     (await pool.query(`select id, title, due_at, occurrence_date::text as day, assigner_id, status from tasks where recurring_id = $1 order by id`, [sid])).rows;
@@ -1038,7 +1230,7 @@ describe('Server authorization on the shared rules (T-3.2; TASK-04, SEC-1, AC-6)
     try {
       assert.ok((await lead.get(`/api/tasks/${teamTask}`)).status === 200, 'lead sees a report\'s task given by the manager');
       await cos.put('/api/roles/lead', { permissions: DEFAULT_ROLE_PERMISSIONS.lead.filter((p) => p !== 'assign_tasks' && p !== 'view_tasks') });
-      const created = await lead.post('/api/tasks', { title: 'Should fail', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due(localIn(30, 'Asia/Kolkata')) });
+      const created = await lead.post('/api/tasks', { ...M, title: 'Should fail', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due(localIn(30, 'Asia/Kolkata')) });
       assert.equal(created.status, 403, 'assign_tasks removed');
       assert.deepEqual((await (await as(U.leadA)).get('/api/tasks/options/assignees')).body, [], 'nobody to assign to');
       assert.deepEqual(await lead.get(`/api/tasks/${teamTask}`), await lead.get('/api/tasks/999999'), 'view_tasks removed: same 404 as a missing task');
@@ -1057,6 +1249,8 @@ describe('Server authorization on the shared rules (T-3.2; TASK-04, SEC-1, AC-6)
     assert.ok(sched[0], 'fixture: organization 1 has a recurring schedule');
     assert.deepEqual((await other.get('/api/recurring')).body, [], 'schedules: none from organization 1');
     assert.deepEqual(await other.post(`/api/recurring/${sched[0].id}/active`, { active: false }), await other.post('/api/recurring/999999/active', { active: false }));
+    // KI-39: reset access never reaches another organization's people.
+    assert.deepEqual(await other.post(`/api/people/${U.staffA1}/reset-access`), await other.post('/api/people/999999/reset-access'));
     const outbox = (await other.get('/api/deliveries')).body;
     const org1 = new Set((await pool.query('select id from users where organization_id = 1')).rows.map((r) => r.id));
     assert.ok(!outbox.items.some((d: any) => org1.has(d.recipient.id)), 'delivery log: nothing from organization 1');
@@ -1400,10 +1594,12 @@ describe('Cutover to the new task model (T-4.0; ADR-0003)', () => {
   it('completing and reopening store the new statuses; tasks can never be deleted', async () => {
     const id = await newTask(U.mgrA, U.staffA1, 'low', 40, 'BAIS', 'Close and reopen');
     const mgr = await as(U.mgrA);
-    assert.equal((await mgr.post(`/api/tasks/${id}/status`, { status: 'done', note: 'Finished offline' })).status, 200);
+    assert.equal((await (await as(U.staffA1)).post(`/api/tasks/${id}/complete`, { note: 'Finished offline' })).status, 200);
     assert.equal((await pool.query('select status, completed_at is not null as c from tasks where id = $1', [id])).rows[0].status, 'completed');
-    assert.equal((await mgr.post(`/api/tasks/${id}/status`, { status: 'open', note: 'Needs another pass' })).status, 200);
+    assert.equal((await mgr.post(`/api/tasks/${id}/reopen`, { reason: 'Needs another pass', ...due(localIn(30, 'Asia/Kolkata')) })).status, 200);
     assert.deepEqual((await pool.query('select status, completed_at from tasks where id = $1', [id])).rows[0], { status: 'reopened', completed_at: null });
+    // KI-38: the legacy status route, which bypassed the workflow and review, is gone.
+    assert.equal((await mgr.post(`/api/tasks/${id}/status`, { status: 'done', note: 'Skip review' })).status, 404);
     await assert.rejects(pool.query('delete from tasks where id = $1', [id]), /archived, never deleted/);
   });
 });
@@ -1471,7 +1667,7 @@ describe('Task detail (T-4.2; TASK-05)', () => {
 });
 
 describe('Create, draft, publish, edit (T-4.3, T-4.4; TASK-01…03, EXT-04)', () => {
-  const body = (over: Record<string, unknown> = {}) => ({ title: 'Prepare filing', category: 'Operations', assigneeId: U.staffA1, priority: 'normal', ...due(localIn(30, 'Asia/Kolkata')), ...over });
+  const body = (over: Record<string, unknown> = {}) => ({ ...M, title: 'Prepare filing', category: 'Operations', assigneeId: U.staffA1, priority: 'normal', ...due(localIn(30, 'Asia/Kolkata')), ...over });
 
   it('TASK-01-AC-3/4: each rule answers 422 with its message; staff get 403', async () => {
     const lead = await as(U.leadA);
@@ -1524,7 +1720,7 @@ describe('Create, draft, publish, edit (T-4.3, T-4.4; TASK-01…03, EXT-04)', ()
     const mgr = await as(U.mgrA);
     const current = (await mgr.get(`/api/tasks/${id}`)).body.task;
     // After advance(H), localIn(39) names the same minute as the original localIn(40): the due date is unchanged.
-    const edit = (over: Record<string, unknown>) => mgr.put(`/api/tasks/${id}`, { title: current.title, category: 'Operations', assigneeId: current.assigneeId, priority: current.priority, ...due(localIn(39, 'America/Los_Angeles')), ...over });
+    const edit = (over: Record<string, unknown>) => mgr.put(`/api/tasks/${id}`, { ...M, title: current.title, category: 'Operations', assigneeId: current.assigneeId, priority: current.priority, ...due(localIn(39, 'America/Los_Angeles')), ...over });
     const before = current.clockStartedAt;
     advance(H);
     const e1 = await edit({ title: 'Edit check renamed' });
@@ -1595,7 +1791,7 @@ describe('Acknowledge, start, progress, block (T-4.5, T-4.6; WF-01…03, WF-11)'
 describe('Submit, complete, review (T-4.7; WF-04…06)', () => {
   it('rounds, the review rules, send-back restarts the clock, approval completes; a second decision is a 409', async () => {
     const lead = await as(U.leadA);
-    const t = (await lead.post('/api/tasks', { title: 'Reviewed work', category: 'Operations', assigneeId: U.staffA1, priority: 'normal', ...due(localIn(30, 'Asia/Kolkata')), reviewRequired: true })).body.task;
+    const t = (await lead.post('/api/tasks', { ...M, title: 'Reviewed work', category: 'Operations', assigneeId: U.staffA1, priority: 'normal', ...due(localIn(30, 'Asia/Kolkata')), reviewRequired: true })).body.task;
     const staff = await as(U.staffA1);
     await staff.post(`/api/tasks/${t.id}/start`);
     assert.deepEqual((await staff.post(`/api/tasks/${t.id}/complete`)).body, { error: 'This task requires review approval before it can be completed.' });
@@ -1610,7 +1806,8 @@ describe('Submit, complete, review (T-4.7; WF-04…06)', () => {
     await staff.post(`/api/tasks/${t.id}/submit`, { note: 'Second draft ready' });
     const { rows } = await pool.query('select round from reviews where task_id = $1 order by round', [t.id]);
     assert.deepEqual(rows.map((r) => r.round), [1, 2], 'WF-04-AC-1');
-    const done = (await lead.post(`/api/tasks/${t.id}/review`, { decision: 'approved' })).body.task;
+    // PERF: approval carries the reviewer's quality score, and an outcome score when the task has no target.
+    const done = (await lead.post(`/api/tasks/${t.id}/review`, { decision: 'approved', qualityScore: 90, outcomeScore: 90 })).body.task;
     assert.deepEqual({ status: done.status, progress: done.progress }, { status: 'completed', progress: 100 });
     assert.deepEqual((await (await as(U.mgrA)).post(`/api/tasks/${t.id}/review`, { decision: 'approved' })).body, { error: 'There is no pending submission to review.' });
     assert.deepEqual((await staff.get('/api/reviews')).body, { error: "You don't have permission to review tasks." });
@@ -1772,6 +1969,7 @@ describe('Attachments (T-4.11; ATT-01…03, D-13, D-69, S-4)', () => {
     const leadFile = (await upload(lead, `/api/tasks/${id}/attachments`, {}, [['brief.pdf', PDF]])).body.attachments[0];
     assert.deepEqual((await staff.req('DELETE', `/api/attachments/${leadFile.id}`)).body, { error: 'Only the uploader or a task supervisor can remove this file.' }, 'ATT-03-AC-3');
     assert.equal((await staff.req('DELETE', `/api/attachments/${txt.id}`)).status, 200, 'uploader');
+    assert.equal((await (await as(U.ceo)).req('DELETE', `/api/attachments/${csv.id}`)).status, 403, 'D-33: the read-only CEO cannot remove files (KI-40)');
     assert.equal((await lead.req('DELETE', `/api/attachments/${csv.id}`)).status, 200, 'overseer');
     const d = (await staff.get(`/api/tasks/${id}`)).body;
     assert.deepEqual(d.attachments.map((a: { id: number }) => a.id), [leadFile.id], 'ATT-03-AC-1: hidden');
@@ -1788,8 +1986,8 @@ describe('Attachments (T-4.11; ATT-01…03, D-13, D-69, S-4)', () => {
 describe('Calendar and bulk actions (T-4.12; TASK-06, TASK-07)', () => {
   it('TASK-06: days are whole days in each viewer\'s zone; drafts never appear', async () => {
     const lead = await as(U.leadA); // IST
-    const t = (await lead.post('/api/tasks', { title: 'Calendar task', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due(localIn(72, 'Asia/Kolkata')) })).body.task;
-    const draft = (await lead.post('/api/tasks', { title: 'Calendar draft', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due(localIn(72, 'Asia/Kolkata')), draft: true })).body.task;
+    const t = (await lead.post('/api/tasks', { ...M, title: 'Calendar task', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due(localIn(72, 'Asia/Kolkata')) })).body.task;
+    const draft = (await lead.post('/api/tasks', { ...M, title: 'Calendar draft', category: 'Operations', assigneeId: U.staffA1, priority: 'low', ...due(localIn(72, 'Asia/Kolkata')), draft: true })).body.task;
     const ist = localIn(72, 'Asia/Kolkata').slice(0, 10);
     const pt = localIn(72, 'America/Los_Angeles').slice(0, 10);
     const ids = (b: any) => b.items.map((x: { id: number }) => x.id);
@@ -1868,7 +2066,7 @@ describe('Escalation engine on the new model (T-5.1–T-5.3; ESC-01…06a, D-24,
     const start = now;
     const lead = await as(U.leadA);
     const staff = await as(U.staffA1);
-    const t = (await lead.post('/api/tasks', { title: 'Reviewed and late', category: 'Operations', assigneeId: U.staffA1, priority: 'critical', ...due(localIn(10, 'Asia/Kolkata')), reviewRequired: true })).body.task;
+    const t = (await lead.post('/api/tasks', { ...M, title: 'Reviewed and late', category: 'Operations', assigneeId: U.staffA1, priority: 'critical', ...due(localIn(10, 'Asia/Kolkata')), reviewRequired: true })).body.task;
     await staff.post(`/api/tasks/${t.id}/start`);
     assert.equal((await staff.post(`/api/tasks/${t.id}/submit`, { note: 'Ready for a look' })).status, 200);
     setNow(new Date(start.getTime() + 9 * H));
@@ -2180,5 +2378,228 @@ describe('Delivery log and weekly digest (Phase 6: T-6.7, T-6.8)', () => {
     assert.equal(await digests(), rec[0].n, 'a second run the same week sends none');
     const { rows } = await pool.query(`select u.roles from notifications n join users u on u.id = n.user_id where n.event = 'digest' and n.created_at = $1`, [now]);
     assert.ok(rows.every((r) => r.roles.some((x: string) => ['manager', 'cos', 'ceo'].includes(x))), 'NTF-05-AC-4');
+  });
+});
+
+describe('Performance (PERF): measured tasks, ratings, scores, workload', () => {
+  const IST = 'Asia/Kolkata';
+  const measured = (o: Record<string, unknown> = {}) => ({
+    title: 'Follow-up emails to CA attorneys', category: 'Operations', assigneeId: U.staffA1, priority: 'normal',
+    ...due(localIn(30, IST)), target: 150, unit: 'emails', estimatedHours: 2, purpose: 'revenue', ...o,
+  });
+
+  it('PERF Task 2: a task carries target, unit, estimate and purpose; the API requires estimate and purpose', async () => {
+    const lead = await as(U.leadA);
+    const res = await lead.post('/api/tasks', measured());
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.deepEqual(
+      [res.body.task.target, res.body.task.unit, res.body.task.estimatedHours, res.body.task.purpose, res.body.task.achieved],
+      [150, 'emails', 2, 'revenue', null],
+    );
+    const { rows } = await pool.query('select scored from tasks where id = $1', [res.body.task.id]);
+    assert.equal(rows[0].scored, true, 'new tasks are scored');
+    const fields = async (o: Record<string, unknown>) => (await lead.post('/api/tasks', measured(o))).body.fields;
+    assert.deepEqual(await fields({ estimatedHours: undefined }), { estimatedHours: 'Between 0.25 and 200 hours.' });
+    assert.deepEqual(await fields({ purpose: undefined }), { purpose: 'Choose revenue or support.' });
+    assert.deepEqual(await fields({ unit: '' }), { unit: 'Name the unit, e.g. emails.' });
+    assert.deepEqual(await fields({ target: 0 }), { target: 'Enter a target above 0.' });
+    assert.deepEqual(await fields({ estimatedHours: 300 }), { estimatedHours: 'Between 0.25 and 200 hours.' });
+    // A draft may leave them out; publishing requires them.
+    const draft = await lead.post('/api/tasks', measured({ estimatedHours: undefined, purpose: undefined, draft: true }));
+    assert.equal(draft.status, 201);
+    assert.deepEqual((await lead.post(`/api/tasks/${draft.body.task.id}/publish`)).body.fields, { estimatedHours: 'Between 0.25 and 200 hours.', purpose: 'Choose revenue or support.' });
+  });
+
+  it('PERF Task 2: a schedule carries the measured fields to each generated task', async () => {
+    const day = DateTime.fromJSDate(now, { zone: IST }).plus({ days: 1 }).startOf('day').set({ hour: 9 });
+    setNow(day.toJSDate());
+    const res = await (await as(U.leadA)).post('/api/recurring', {
+      title: 'Daily outreach batch', category: 'Operations', priority: 'normal', assigneeId: U.staffA1, frequency: 'daily', interval: 1,
+      startDate: day.toISODate(), dueHour: 17, target: 50, unit: 'emails', estimatedHours: 1.5, purpose: 'revenue',
+    });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    const t = await pool.query('select target, unit, estimated_hours, purpose from tasks where recurring_id = $1', [res.body.id]);
+    assert.deepEqual(t.rows[0], { target: 50, unit: 'emails', estimated_hours: 1.5, purpose: 'revenue' });
+  });
+
+  it('PERF Task 3: reporting achieved updates progress and counts as an update; finishing short or late needs a reason', async () => {
+    const lead = await as(U.leadA);
+    const staff = await as(U.staffA1);
+    const id = (await lead.post('/api/tasks', measured({ title: 'Outreach batch A' }))).body.task.id;
+    const before = (await pool.query('select clock_started_at from tasks where id = $1', [id])).rows[0].clock_started_at;
+    advance(MIN);
+    const p = await staff.post(`/api/tasks/${id}/progress`, { message: 'Sent the first batch', achieved: 70 });
+    assert.equal(p.status, 200, JSON.stringify(p.body));
+    assert.deepEqual([p.body.task.achieved, p.body.task.progress], [70, 47]);
+    const after = (await pool.query('select clock_started_at from tasks where id = $1', [id])).rows[0].clock_started_at;
+    assert.ok(after > before, 'the silence clock restarted');
+    assert.deepEqual((await staff.post(`/api/tasks/${id}/complete`, { achieved: 140 })).body.fields, { shortfallReason: 'Explain the shortfall or delay.' });
+    const done = await staff.post(`/api/tasks/${id}/complete`, { achieved: 140, result: '6 replies, 2 consultations booked', shortfallReason: '10 addresses bounced' });
+    assert.equal(done.status, 200, JSON.stringify(done.body));
+    assert.deepEqual([done.body.task.status, done.body.task.achieved, done.body.task.result, done.body.task.shortfallReason], ['completed', 140, '6 replies, 2 consultations booked', '10 addresses bounced']);
+    // Late but on target still needs a reason.
+    const late = (await lead.post('/api/tasks', measured({ title: 'Outreach batch B', ...due(localIn(2, IST)) }))).body.task.id;
+    advance(3 * H);
+    assert.deepEqual((await staff.post(`/api/tasks/${late}/complete`, { achieved: 150 })).body.fields, { shortfallReason: 'Explain the shortfall or delay.' });
+    assert.equal((await staff.post(`/api/tasks/${late}/complete`, { achieved: 150, shortfallReason: 'CRM import was down' })).status, 200);
+    // A task without a target has nothing to report against.
+    const plain = (await lead.post('/api/tasks', measured({ title: 'Write the blog', target: null, unit: '' }))).body.task.id;
+    assert.deepEqual((await staff.post(`/api/tasks/${plain}/progress`, { message: 'Draft half done', achieved: 3 })).body.fields, { achieved: 'This task has no target to report against.' });
+  });
+
+  it('PERF Task 4: approving a review needs a quality score (and an outcome score without a target)', async () => {
+    const lead = await as(U.leadA);
+    const staff = await as(U.staffA1);
+    const id = (await lead.post('/api/tasks', measured({ title: 'Draft the PERM brief', target: null, unit: '', reviewRequired: true }))).body.task.id;
+    await staff.post(`/api/tasks/${id}/start`);
+    assert.equal((await staff.post(`/api/tasks/${id}/submit`, { note: 'Brief ready for review' })).status, 200);
+    assert.deepEqual((await lead.post(`/api/tasks/${id}/review`, { decision: 'approved' })).body.fields, {
+      qualityScore: 'Give a quality score from 0 to 100.',
+      outcomeScore: 'Give an outcome score from 0 to 100.',
+    });
+    const ok = await lead.post(`/api/tasks/${id}/review`, { decision: 'approved', qualityScore: 90, outcomeScore: 85 });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.deepEqual([ok.body.task.status, ok.body.task.qualityScore, ok.body.task.outcomeScore], ['completed', 90, 85]);
+  });
+
+  it('PERF Task 4: the giver rates a finished task and decides on a shortfall; others may not', async () => {
+    const lead = await as(U.leadA);
+    const staff = await as(U.staffA1);
+    const plain = (await lead.post('/api/tasks', measured({ title: 'Write the weekly blog', target: null, unit: '' }))).body.task.id;
+    const done = await staff.post(`/api/tasks/${plain}/complete`, {});
+    assert.deepEqual([done.body.task.awaitingRating, done.body.actions.includes('rate')], [true, false], 'the assignee cannot rate');
+    assert.equal((await (await as(U.mgrA)).post(`/api/tasks/${plain}/rate`, { outcomeScore: 50 })).status, 403, 'a supervisor who did not give it');
+    const rated = await lead.post(`/api/tasks/${plain}/rate`, { outcomeScore: 80 });
+    assert.equal(rated.status, 200, JSON.stringify(rated.body));
+    assert.deepEqual([rated.body.task.outcomeScore, rated.body.task.awaitingRating], [80, false]);
+    assert.deepEqual((await lead.post(`/api/tasks/${plain}/rate`, {})).body.fields, { _: 'Give an outcome score or decide on the shortfall.' });
+    // A shortfall is accepted (or not) by the giver; the decision is recorded.
+    const short = (await lead.post('/api/tasks', measured({ title: 'Outreach batch C' }))).body.task.id;
+    await staff.post(`/api/tasks/${short}/complete`, { achieved: 120, shortfallReason: 'List ran out' });
+    assert.equal((await lead.post(`/api/tasks/${short}/rate`, { shortfallAccepted: true })).status, 200);
+    const { rows } = await pool.query('select shortfall_accepted, shortfall_decided_by from tasks where id = $1', [short]);
+    assert.deepEqual(rows[0], { shortfall_accepted: true, shortfall_decided_by: U.leadA });
+    // A blocked task past its due date: the giver may accept the delay while it is still open.
+    const blocked = (await lead.post('/api/tasks', measured({ title: 'Outreach batch D', ...due(localIn(1, IST)) }))).body.task.id;
+    await staff.post(`/api/tasks/${blocked}/block`, { reason: 'CRM import access missing' });
+    advance(2 * H);
+    const open = await lead.post(`/api/tasks/${blocked}/rate`, { shortfallAccepted: true });
+    assert.equal(open.status, 200, JSON.stringify(open.body));
+    assert.equal(open.body.task.shortfallAccepted, true);
+  });
+
+  it('PERF Task 5: team leaderboard, breakdown and workload follow the access rules and the formulas', async () => {
+    advance(60 * 24 * H); // past every earlier test's due dates, so only this test's tasks fall in the periods below
+    // Test data: two fresh teams. Staff A2 (and Lead A) in Perf A, Staff B1 in Perf B.
+    const { rows: teams } = await pool.query(`insert into teams (name, entity_id, organization_id) values ('Perf A', 'BAIS', 1), ('Perf B', 'EMB', 1) returning id`);
+    const [teamA, teamB] = teams.map((t) => t.id);
+    await pool.query('update users set team_id = $1 where id = any($2)', [teamA, [U.staffA2, U.leadA]]);
+    await pool.query('update users set team_id = $1 where id = $2', [teamB, U.staffB1]);
+    invalidateDirectory();
+    const lead = await as(U.leadA);
+    const a2 = await as(U.staffA2);
+    const PT = 'America/Los_Angeles';
+    for (let i = 0; i < 5; i++) {
+      const id = (await lead.post('/api/tasks', measured({ title: `Perf task ${i}`, assigneeId: U.staffA2, target: 10, ...due(localIn(30, PT)) }))).body.task.id;
+      assert.equal((await a2.post(`/api/tasks/${id}/complete`, { achieved: 10 })).status, 200);
+    }
+    const range = (d: number) => DateTime.fromJSDate(now, { zone: 'America/New_York' }).plus({ days: d }).toISODate();
+    const q = `period=custom&from=${range(-1)}&to=${range(5)}`;
+    const board = await lead.get(`/api/performance/leaderboard?teamId=${teamA}&${q}`);
+    assert.equal(board.status, 200, JSON.stringify(board.body));
+    assert.deepEqual(board.body.weights, { outcome: 0.5, timeliness: 0.2, quality: 0.3 });
+    const row = board.body.rows.find((r: any) => r.userId === U.staffA2);
+    assert.deepEqual([row.outcome, row.timeliness, row.quality, row.score, row.eligible, row.rank], [100, 100, null, 100, 5, 1]);
+    assert.ok(row.flags.includes('no_quality_reviews'));
+    const leadRow = board.body.rows.find((r: any) => r.userId === U.leadA);
+    assert.deepEqual([leadRow.score, leadRow.rank], [null, null], 'no eligible tasks: no score, not ranked');
+
+    // Who sees which board (FRD §3).
+    assert.equal((await a2.get(`/api/performance/leaderboard?teamId=${teamA}&${q}`)).status, 200, 'own team');
+    const missing = await a2.get(`/api/performance/leaderboard?teamId=999999&${q}`);
+    assert.deepEqual(await a2.get(`/api/performance/leaderboard?teamId=${teamB}&${q}`), missing, 'another team = not found');
+    assert.equal((await (await as(U.leadB)).get(`/api/performance/leaderboard?teamId=${teamA}&${q}`)).status, 404, 'not in their reporting line');
+    assert.equal((await (await as(U.mgrA)).get(`/api/performance/leaderboard?teamId=${teamA}&${q}`)).status, 200, 'a manager above the team');
+    assert.equal((await (await as(U.cos)).get(`/api/performance/leaderboard?teamId=${teamB}&${q}`)).status, 200, 'the CoS sees every team');
+    assert.equal((await (await as(900)).get(`/api/performance/leaderboard?teamId=${teamA}&${q}`)).status, 404, 'never across organizations');
+    // The team picker lists only the boards the viewer may open.
+    assert.deepEqual((await a2.get('/api/performance/teams')).body.map((t: any) => t.id), [teamA], 'staff: own team only');
+    assert.ok((await (await as(U.cos)).get('/api/performance/teams')).body.some((t: any) => t.id === teamB), 'CoS: every team');
+
+    // Breakdown: an employee may open only their own; the tasks behind the score are listed.
+    const mine = await a2.get(`/api/performance/people/${U.staffA2}?${q}`);
+    assert.equal(mine.status, 200, JSON.stringify(mine.body));
+    assert.equal(mine.body.tasks.length, 5);
+    assert.equal((await a2.get(`/api/performance/people/${U.leadA}?${q}`)).status, 404);
+
+    // Review Focus 3: an extended due date moves the task into the new date's period.
+    const moved = (await lead.post('/api/tasks', measured({ title: 'Moves to next week', assigneeId: U.staffA2, ...due(localIn(30, PT)) }))).body.task.id;
+    assert.equal((await lead.post(`/api/tasks/${moved}/due`, { ...due(localIn(24 * 9, PT)), reason: 'Client asked for more time' })).status, 200);
+    await a2.post(`/api/tasks/${moved}/complete`, { achieved: 150 });
+    const ids = async (from: number, to: number) => (await a2.get(`/api/performance/people/${U.staffA2}?period=custom&from=${range(from)}&to=${range(to)}`)).body.tasks.map((t: any) => t.id);
+    assert.ok(!(await ids(-1, 5)).includes(moved), 'not in the original period');
+    assert.ok((await ids(6, 12)).includes(moved), 'in the new period');
+
+    // Workload: estimated hours of open work, against working hours.
+    const open = (await lead.post('/api/tasks', measured({ title: 'Big open job', assigneeId: U.staffA2, estimatedHours: 30, ...due(localIn(30, PT)) }))).body.task.id;
+    assert.ok(open);
+    const wl = await lead.get(`/api/workload?teamId=${teamA}`);
+    assert.equal(wl.status, 200, JSON.stringify(wl.body));
+    const w = wl.body.rows.find((r: any) => r.userId === U.staffA2);
+    assert.ok(w.openHours >= 30 && ['light', 'normal', 'overloaded'].includes(w.band));
+    const picker = (await lead.get('/api/tasks/options/assignees')).body.find((u: any) => u.id === U.staffA2);
+    assert.ok(picker.load && typeof picker.load.loadPercent === 'number', 'the assignee picker shows load');
+  });
+
+  it('PERF final review I1–I3: review scores are logged; no shortfall decision without a reason; reopening clears the ratings', async () => {
+    const lead = await as(U.leadA);
+    const staff = await as(U.staffA1);
+    // I1: the review's scores are in the tamper-evident activity log.
+    const r = (await lead.post('/api/tasks', measured({ title: 'Reviewed report', target: null, unit: '', reviewRequired: true }))).body.task.id;
+    await staff.post(`/api/tasks/${r}/start`);
+    await staff.post(`/api/tasks/${r}/submit`, { note: 'Report ready for review' });
+    assert.equal((await lead.post(`/api/tasks/${r}/review`, { decision: 'approved', qualityScore: 70, outcomeScore: 60 })).status, 200);
+    const log = await pool.query(`select after from activity_log where task_id = $1 and kind = 'review_decided' order by seq desc limit 1`, [r]);
+    assert.deepEqual([log.rows[0].after.qualityScore, log.rows[0].after.outcomeScore], [70, 60]);
+    // I2: a shortfall decision needs a shortfall or delay reason to decide on.
+    const plain = (await lead.post('/api/tasks', measured({ title: 'On-time plain task', target: null, unit: '' }))).body.task.id;
+    await staff.post(`/api/tasks/${plain}/complete`, {});
+    assert.deepEqual((await lead.post(`/api/tasks/${plain}/rate`, { shortfallAccepted: true })).body.fields, { shortfallAccepted: 'There is no shortfall or delay reason to decide on.' });
+    // I3: reopening clears the ratings and the reason, so the new round is judged afresh.
+    const short = (await lead.post('/api/tasks', measured({ title: 'Outreach batch E' }))).body.task.id;
+    await staff.post(`/api/tasks/${short}/complete`, { achieved: 100, shortfallReason: 'List ran out' });
+    await lead.post(`/api/tasks/${short}/rate`, { shortfallAccepted: true });
+    assert.equal((await lead.post(`/api/tasks/${short}/reopen`, { reason: 'Client sent more contacts', ...due(localIn(48, IST)) })).status, 200);
+    const { rows } = await pool.query('select shortfall_reason, shortfall_accepted, shortfall_decided_by, outcome_score, quality_score from tasks where id = $1', [short]);
+    assert.deepEqual(rows[0], { shortfall_reason: null, shortfall_accepted: null, shortfall_decided_by: null, outcome_score: null, quality_score: null });
+  });
+});
+
+describe('Demo clock (T-10.1; DEMO-01, D-17, D-47)', () => {
+  it('TC-DEMO-01-01: with demo tools off, POST /api/dev/clock is 404 for everyone (CoS included) and /me reports demo: null', async () => {
+    const { config: cfg } = await import('../src/config.js');
+    assert.equal(cfg.demoTools, false, 'off unless DEMO_TOOLS=true');
+    for (const id of [U.cos, U.mgrA]) assert.equal((await (await as(id)).post('/api/dev/clock', { advanceHours: 1 })).status, 404, `user ${id}: 404, not 403`);
+    assert.equal((await (await as(U.cos)).get('/api/me')).body.demo, null);
+  });
+
+  it('TC-DEMO-01-02: with demo tools on, a non-CoS gets 403; the CoS moves the clock, audited before/after; bad input is 422', async () => {
+    const { config: cfg } = await import('../src/config.js');
+    const cos = await as(U.cos);
+    (cfg as { demoTools: boolean }).demoTools = true;
+    try {
+      assert.equal((await (await as(U.mgrA)).post('/api/dev/clock', { advanceHours: 1 })).status, 403);
+      for (const bad of [{ advanceHours: -1 }, { advanceHours: 721 }, { advanceHours: 1, extra: true }]) assert.equal((await cos.post('/api/dev/clock', bad)).status, 422, JSON.stringify(bad));
+      const r = await cos.post('/api/dev/clock', { advanceHours: 6 });
+      assert.equal(r.status, 200);
+      assert.equal(r.body.offsetHours, 6);
+      assert.equal((await cos.get('/api/me')).body.demo.offsetHours, 6, 'G-8: /me carries the offset for the banner');
+      const { rows } = await pool.query(`select before, after, source from admin_log where kind = 'demo_clock' order by seq desc limit 1`);
+      assert.deepEqual(rows[0], { before: { offsetHours: 0 }, after: { offsetHours: 6 }, source: 'demo' });
+      assert.equal((await cos.post('/api/dev/clock', { reset: true })).body.offsetHours, 0);
+    } finally {
+      (cfg as { demoTools: boolean }).demoTools = false;
+      (await import('../src/clock.js')).setOffsetMs(0);
+    }
   });
 });

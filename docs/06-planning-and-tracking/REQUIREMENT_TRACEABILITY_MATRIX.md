@@ -18,10 +18,11 @@
 | FR-5 | Lead (once), manager or CoS extends a due date; old date, new date and reason logged | EXT-04 (plus EXT-01…03, TASK-03) | WF §EXT-04 | 0005 | T-4.4, T-4.9 | TC-EXT-02-02…04, TC-ESC-02-03 | ANALYSIS |
 | FR-6 | Reassign, logged; the clock restarts | WF-07 | WF §WF-07 | 0003 | T-4.8 | TC-WF-07-01/02 | ANALYSIS |
 | FR-7 | Recurring daily, weekly, monthly tasks | REC-01…04 | REC §REC-01…04 | — (D-5 open) | T-7.1…T-7.3 | TC-REC-01-01, TC-REC-02-01/02, TC-REC-03-01, TC-REC-04-01…03 | REC-02/04 BLOCKED (D-5) |
+| PERF (owner brief 2026-11-06; beyond the WO, D-110) | Outcome, timeliness, quality, score, efficiency, workload, team leaderboard | PERF-01…07 | [PERFORMANCE-FRD](../02-product-requirements/features/PERFORMANCE-FRD.md) | D-110…D-121 | [PERFORMANCE_PLAN](PERFORMANCE_PLAN.md) Tasks 1–8 | TC-PERF-01…06 | PERF-01…07 DONE (2026-11-07) |
 | FR-8 | Engine at least every 5 min | ESC-01…05, ESC-08 | ESC §ESC-01…05, §ESC-08 | 0006; 0007 (Proposed) | T-1.17, T-5.1, T-5.5 | TC-ESC-01-06, TC-ESC-08-01…03 | ANALYSIS |
 | FR-9 | Recipient acknowledges with a note; repeats stop 12 h; clock not reset | ESC-06, ESC-06a, ESC-05 | ESC §ESC-05, §ESC-06, §ESC-06a | — | T-5.3 | TC-ESC-06-01…04, TC-ESC-05-01 | ANALYSIS (D-26) |
-| FR-10 | List with stage stripe and filters; detail with full log; summary tiles | TASK-04, TASK-05, TASK-09, TASK-10 | TASKS §TASK-04, §05, §09, §10 | 0009 (Proposed) | T-4.1, T-4.2, T-8.3 | TC-TASK-04-03, TC-TASK-05-03; **none for TASK-10** | ANALYSIS |
-| FR-11 | By entity and by person; CSV and PDF | RPT-05, RPT-06, RPT-07, RPT-03, DASH-01 | RPT §RPT-03, §05, §06, §07; DASH §DASH-01 | — (D-15 decided) | T-8.1, T-9.2, T-9.3 | TC-DASH-01-01, TC-DASH-01-03, TC-RPT-03-01…03 | ANALYSIS |
+| FR-10 | List with stage stripe and filters; detail with full log; summary tiles | TASK-04, TASK-05, TASK-09, TASK-10 | TASKS §TASK-04, §05, §09, §10 | 0009 (Proposed) | T-4.1, T-4.2, T-8.3 | TC-TASK-04-03, TC-TASK-05-03, TC-TASK-10-02 | DONE (2026-11-07) |
+| FR-11 | By entity and by person; CSV and PDF | RPT-05, RPT-06, RPT-07, RPT-03, DASH-01 | RPT §RPT-03, §05, §06, §07; DASH §DASH-01 | — (D-15 decided) | T-8.1, T-9.2, T-9.3 | TC-DASH-01-01, TC-DASH-01-03, TC-RPT-03-01…03 | CODE_COMPLETE |
 | FR-12 | Monday 09:00 IST digest to managers and the Founder's Office | NTF-05 | NTF §NTF-05 | — (D-14 decided) | T-6.8 | TC-NTF-05-01/02 | ANALYSIS |
 
 ## 2. WO non-functional, security and operating items
@@ -76,7 +77,7 @@ The 16 IDs added at the end of the PRD have no `TC-<ID>-NN` of their own. Most a
 | **AUTH-07** | none. TC-AUTH-01-06 tests the challenge only, not enrolment or the D-65 reset | **gap**: add in T-2.3 |
 | AUTH-08 | TC-AUTH-01-06 | covered indirectly |
 | TASK-09 | TC-TASK-04-03 | covered indirectly |
-| **TASK-10** | none. The summary tiles and stage stripe are untested | **gap**: add in T-8.3 |
+| **TASK-10** | TC-TASK-10-02 (written 2026-11-06, T-8.3) | closed once run |
 | EXT-04 | TC-EXT-02-02…04 (filed under EXT-02) | covered indirectly; misfiled |
 | ESC-06a | TC-ESC-06-01, TC-ESC-06-03 | covered indirectly |
 | NTF-07 | TC-WF-11-02…04 | covered indirectly |

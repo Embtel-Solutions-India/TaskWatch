@@ -188,6 +188,9 @@ export function resetAccess(id: string): string | Promise<string> {
   return mutate((db, user, at) => {
     assertPerm(db, user, 'manage_staff', 'manage staff');
     const u = findUser(db, id);
+    // Same rules as the server: a CoS only by a CoS; D-98: otherwise only oneself or people below.
+    if (u.role === 'cos' && user.role !== 'cos') throw new ApiError(403, 'Only a Chief of Staff can reset another Chief of Staff.');
+    if (user.role !== 'cos' && u.id !== user.id && !reportsOf(db, user.id).has(u.id)) throw new ApiError(403, 'You can only reset access for yourself or people below you in the reporting line.');
     const token = Math.random().toString(36).slice(2, 10);
     db.passwordResets.push({ email: u.email, token, at });
     audit(db, { at, actorId: user.id, action: 'staff.access_reset', targetType: 'user', targetId: id, taskId: null, prev: null, next: 'Reset link issued (simulated)', source: 'ui', context: u.email });
@@ -343,6 +346,11 @@ export function setSettings(next: Settings): void | Promise<void> {
 }
 
 /* ---------------- Audit ---------------- */
+
+/** D-16: manual integrity check. Server only: the prototype's browser store has no hash chains. */
+export function checkAuditChain() {
+  return tasksServer.chainCheck();
+}
 
 export function listAudit(): AuditRecord[] | Promise<(AuditRecord & { actorName?: string | null })[]> {
   if (BACKEND === 'server') return tasksServer.audit();

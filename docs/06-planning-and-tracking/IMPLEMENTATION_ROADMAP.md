@@ -188,6 +188,7 @@ The exit criteria of every phase include the [Definition of Done](../04-engineer
   - DST and month-end edge cases.
 
 ### Phase 8: Dashboards (WP-5)
+- **Status: DONE 2026-11-07** (owner's `npm test` + `npm run e2e` green). TASK-10 test case added (TC-TASK-10-02); AC-8 and AC-6 automated parts covered by TC-DASH-01-05 and TC-DASH-03-02/03.
 - **Goal:** server-computed, scoped dashboard payloads, the FR-10 quick views, the stage stripe and tiles, and search.
 - **Features:** DASH-01…03, TASK-09, TASK-10, SRCH-01.
 - **Entry criteria:**

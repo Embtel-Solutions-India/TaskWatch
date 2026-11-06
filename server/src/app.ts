@@ -10,9 +10,11 @@ import { csrfGuard, errorHandler, SESSION_COOKIE, SESSION_MAX_MS, sessionCookieO
 import { adminRouter } from './routes/admin.js';
 import { authRouter } from './routes/auth.js';
 import { dashboardRouter } from './routes/dashboard.js';
+import { reportsRouter } from './routes/reports.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { peopleRouter } from './routes/people.js';
 import { recurringRouter } from './routes/recurring.js';
+import { performanceRouter } from './routes/performance.js';
 import { rulesRouter } from './routes/rules.js';
 import { tasksRouter } from './routes/tasks.js';
 
@@ -49,7 +51,9 @@ export function createApp(): express.Express {
   api.use(rulesRouter);
   api.use(notificationsRouter);
   api.use(dashboardRouter);
+  api.use(reportsRouter);
   api.use(recurringRouter);
+  api.use(performanceRouter);
   api.use(adminRouter);
   api.use((_req, res) => {
     res.status(404).json({ error: 'Not found' });

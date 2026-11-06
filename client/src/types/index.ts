@@ -70,6 +70,17 @@ export interface Task {
   /** Acknowledgement suppresses repeat notifications until this time. Never resets clocks. */
   snoozeUntil: string | null;
   progress: number;
+  /** PERF (server mode): the giver's measures and the assignee's report. */
+  target?: number | null;
+  unit?: string | null;
+  achieved?: number | null;
+  result?: string | null;
+  estimatedHours?: number | null;
+  purpose?: 'revenue' | 'support' | null;
+  qualityScore?: number | null;
+  outcomeScore?: number | null;
+  shortfallReason?: string | null;
+  shortfallAccepted?: boolean | null;
   reviewRequired: boolean;
   parentId: string | null;
   recurrenceId: string | null;
@@ -98,7 +109,8 @@ export type ActivityType =
   | 'cancelled'
   | 'attachment_added'
   | 'attachment_removed'
-  | 'edited';
+  | 'edited'
+  | 'rated';
 
 export interface Activity {
   id: string;
@@ -140,6 +152,8 @@ export interface Attachment {
   uploadedBy: string;
   at: string;
   context: 'task' | 'progress' | 'comment' | 'review';
+  /** Removed files are hidden but kept (D-31: archive, never delete). */
+  removedAt?: string;
 }
 
 export interface Review {
@@ -290,6 +304,10 @@ export interface Recurrence {
   startDate: string;
   endDate: string | null;
   dueHour: number;
+  target?: number | null;
+  unit?: string | null;
+  estimatedHours?: number | null;
+  purpose?: 'revenue' | 'support' | null;
   active: boolean;
   createdAt: string;
 }

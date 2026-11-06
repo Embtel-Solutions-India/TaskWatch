@@ -2,9 +2,11 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { PRIORITY_LABEL, STATUS_LABEL } from '../../constants';
 import { DataTable } from '../../components/DataTable';
-import { Button, Empty, ErrorState, Field, Dialog, PageHeader, Segmented, Textarea } from '../../components/ui';
+import { Button, Empty, ErrorState, Field, Dialog, PageHeader, Segmented, Stat, Textarea } from '../../components/ui';
 import { useAction, useApi, useCan, useLocalState, useMe } from '../../hooks';
 import { bulkAcknowledge, bulkCancel, listTasks, type TaskScope } from '../../services/api/tasks';
+import { taskStage } from '@taskwatch/shared/insights';
+import type { TaskView } from '../../services/api/base';
 import { ACTIVE_STATUSES } from '../../types';
 import { downloadCsv } from '../../utils/format';
 import { applyFilter, EMPTY_FILTER, SavedViews, taskColumns, TaskFilters, type TaskFilter } from './shared';
@@ -15,6 +17,20 @@ const META: Record<TaskScope, { title: string; description: string }> = {
   team: { title: 'Team Tasks', description: 'Everything assigned to people in your reporting line.' },
   all: { title: 'All Tasks', description: 'Every task in the organization.' },
 };
+
+const isOpen = (t: TaskView) => t.status !== 'draft' && t.status !== 'completed' && t.status !== 'cancelled';
+/** Quick views: the WO FR-10 views (TASK-09) plus the prototype's own (kept, D-20). */
+const QUICK = {
+  all: { label: 'All', test: () => true },
+  open: { label: 'All open', test: isOpen },
+  escalated: { label: 'Escalated to me', test: (t: TaskView) => isOpen(t) && !!t.escalatedToMe },
+  red: { label: 'Red', test: (t: TaskView) => isOpen(t) && t.level >= 2 },
+  blocked: { label: 'Blocked', test: (t: TaskView) => t.status === 'blocked' },
+  closed: { label: 'Closed', test: (t: TaskView) => t.status === 'completed' || t.status === 'cancelled' },
+  attention: { label: 'Needs attention', test: (t: TaskView) => t.overdue || t.level >= 0 || (ACTIVE_STATUSES.includes(t.status) && !t.acknowledgedAt) },
+  review: { label: 'In review', test: (t: TaskView) => t.status === 'submitted' || t.status === 'changes_requested' },
+} as const;
+type Quick = keyof typeof QUICK;
 
 export function TaskListPage({ scope }: { scope: TaskScope }) {
   const user = useMe();
@@ -36,7 +52,10 @@ export function TaskListPage({ scope }: { scope: TaskScope }) {
     setFilterState(f);
     setStored(f);
   };
-  const [quick, setQuick] = useState<'all' | 'attention' | 'review'>('all');
+  const [quick, setQuick] = useState<Quick>(() => {
+    const v = params.get('view');
+    return v && Object.hasOwn(QUICK, v) ? (v as Quick) : 'all';
+  });
   const [cancelIds, setCancelIds] = useState<string[] | null>(null);
   const [reason, setReason] = useState('');
   const cancel = useAction(bulkCancel, {
@@ -47,12 +66,12 @@ export function TaskListPage({ scope }: { scope: TaskScope }) {
 
   const rows = q.data ?? [];
   const filtered = useMemo(() => {
-    let r = applyFilter(rows, filter);
-    if (quick === 'attention') r = r.filter((t) => t.overdue || t.level >= 0 || (ACTIVE_STATUSES.includes(t.status) && !t.acknowledgedAt));
-    if (quick === 'review') r = r.filter((t) => t.status === 'submitted' || t.status === 'changes_requested');
-    return r;
+    return applyFilter(rows, filter).filter(QUICK[quick].test);
   }, [rows, filter, quick]);
-  const attention = applyFilter(rows, filter).filter((t) => t.overdue || t.level >= 0 || (ACTIVE_STATUSES.includes(t.status) && !t.acknowledgedAt)).length;
+  const base = applyFilter(rows, filter);
+  // TASK-10 summary tiles over this list's tasks, so every figure matches the rows below.
+  const open = rows.filter(isOpen);
+  const stageCount = (s: string) => open.filter((t) => taskStage(t.status, t.level) === s).length;
 
   const meta = META[scope];
   const exportRows = (ids?: string[]) => {
@@ -84,6 +103,14 @@ export function TaskListPage({ scope }: { scope: TaskScope }) {
           </>
         }
       />
+      <div className="stats" aria-label="Summary">
+        <Stat label="Open" value={open.length} />
+        <Stat label="On track" value={stageCount('on_track')} tone="ok" />
+        <Stat label="Amber (L0–L1)" value={stageCount('amber')} tone={stageCount('amber') ? 'warn' : undefined} />
+        <Stat label="Red (L2–L3)" value={stageCount('red')} tone={stageCount('red') ? 'danger' : undefined} />
+        <Stat label="Blocked" value={rows.filter(QUICK.blocked.test).length} />
+        <Stat label="Escalated to me" value={rows.filter(QUICK.escalated.test).length} />
+      </div>
       <DataTable
         caption={meta.title}
         storageKey={`tasks.${scope}`}
@@ -100,11 +127,7 @@ export function TaskListPage({ scope }: { scope: TaskScope }) {
               label="Quick filter"
               value={quick}
               onChange={setQuick}
-              options={[
-                { value: 'all', label: 'All', count: applyFilter(rows, filter).length },
-                { value: 'attention', label: 'Needs attention', count: attention },
-                { value: 'review', label: 'In review', count: applyFilter(rows, filter).filter((t) => t.status === 'submitted' || t.status === 'changes_requested').length },
-              ]}
+              options={(Object.keys(QUICK) as Quick[]).map((k) => ({ value: k, label: QUICK[k].label, count: base.filter(QUICK[k].test).length }))}
             />
             <TaskFilters value={filter} onChange={setFilter} rows={rows} showAssignee={scope !== 'mine'} showGiver={scope !== 'assigned_by_me'} />
           </div>

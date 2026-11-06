@@ -6,6 +6,9 @@ import { Banner, Button, Card, Checkbox, ConfirmDialog, ErrorState, Field, Input
 import { useAction, useApi } from '../../hooks';
 import { BACKEND } from '../../services/http';
 import { WHATSAPP_ENABLED } from '@taskwatch/shared/notifications';
+
+/** Mandatory alert channels (D-106: WhatsApp only when switched on). */
+const CHANNELS = WHATSAPP_ENABLED ? 'WhatsApp, email, in-app' : 'Email, in-app';
 import { getPolicies, getRoles, getSettings, resetPolicy, setRolePermissions, setRules, setSettings } from '../../services/api/admin';
 import { computeLevel } from '../../services/engine/escalation';
 import type { Permission, Role, RulesConfig, Settings } from '../../types';
@@ -274,7 +277,7 @@ export function PoliciesPage() {
             </Field>
           </div>
         </Card>
-        <Card title="Quiet hours (email & WhatsApp)" sub="Hold L0/L1 email and WhatsApp overnight in the recipient's zone; in-app alerts are never held.">
+        <Card title={`Quiet hours (${WHATSAPP_ENABLED ? 'email & WhatsApp' : 'email'})`} sub={`Hold L0/L1 ${WHATSAPP_ENABLED ? 'email and WhatsApp' : 'email'} overnight in the recipient's zone; in-app alerts are never held.`}>
           <Checkbox label="Enable quiet hours" checked={r.quietHours.enabled} onChange={(e) => setR({ ...r, quietHours: { ...r.quietHours, enabled: e.target.checked } })} />
           <div className="grid-2">
             <Field label="Start" htmlFor="qs">
@@ -296,11 +299,11 @@ export function PoliciesPage() {
             <tr><th>Event</th><th>Recipient</th><th>Copied</th><th>Channels</th></tr>
           </thead>
           <tbody>
-            <tr><td>New task assigned</td><td>Assignee</td><td>—</td><td>WhatsApp, email, in-app</td></tr>
-            <tr><td><span className="lvl lvl-0">L0</span> Reminder</td><td>Assignee</td><td>—</td><td>WhatsApp, email, in-app</td></tr>
-            <tr><td><span className="lvl lvl-1">L1</span> Team lead</td><td>Assignee's team lead</td><td>Assignee</td><td>WhatsApp, email, in-app</td></tr>
-            <tr><td><span className="lvl lvl-2">L2</span> Manager</td><td>Manager</td><td>Lead and assignee</td><td>WhatsApp, email, in-app</td></tr>
-            <tr><td><span className="lvl lvl-3">L3</span> Founder's Office</td><td>Chief of Staff{r.l3NotifyCeo ? ' and CEO' : ''}</td><td>Manager</td><td>WhatsApp, email, in-app, top of dashboard</td></tr>
+            <tr><td>New task assigned</td><td>Assignee</td><td>—</td><td>{CHANNELS}</td></tr>
+            <tr><td><span className="lvl lvl-0">L0</span> Reminder</td><td>Assignee</td><td>—</td><td>{CHANNELS}</td></tr>
+            <tr><td><span className="lvl lvl-1">L1</span> Team lead</td><td>Assignee's team lead</td><td>Assignee</td><td>{CHANNELS}</td></tr>
+            <tr><td><span className="lvl lvl-2">L2</span> Manager</td><td>Manager</td><td>Lead and assignee</td><td>{CHANNELS}</td></tr>
+            <tr><td><span className="lvl lvl-3">L3</span> Founder's Office</td><td>Chief of Staff{r.l3NotifyCeo ? ' and CEO' : ''}</td><td>Manager</td><td>{CHANNELS}, top of dashboard</td></tr>
             <tr><td>Weekly digest</td><td>Managers, Founder's Office</td><td>—</td><td>Email</td></tr>
           </tbody>
         </table>

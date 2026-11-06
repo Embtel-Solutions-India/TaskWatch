@@ -4849,3 +4849,21 @@ button.barlist-row {
 .pre {
   white-space: pre-wrap;
 }
+
+/* TASK-10 stage stripe (D-49) */
+.stage-stripe {
+  display: inline-block;
+  width: 6px;
+  height: 22px;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+.stage-on_track {
+  background: var(--ok);
+}
+.stage-amber {
+  background: var(--warn);
+}
+.stage-red {
+  background: var(--danger);
+}

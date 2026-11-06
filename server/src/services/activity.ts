@@ -28,7 +28,9 @@ export type LogKind =
   | 'comment_edited'
   | 'comment_deleted'
   | 'attachment_added'
-  | 'attachment_removed';
+  | 'attachment_removed'
+  // PERF: the giver's Rate step (outcome score, shortfall decision).
+  | 'rated';
 
 /**
  * DATABASE_DESIGN §4.3: log rows are immutable and hashed, so rows keep the kind and status names they were written

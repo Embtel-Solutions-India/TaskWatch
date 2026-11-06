@@ -1,10 +1,13 @@
+import { workloadFor } from './performance.js';
+import { taskProgress } from '@taskwatch/shared/performance';
+import type { DashExtension, DashTask } from '@taskwatch/shared/insights';
 import { isCoS, isFoundersOffice } from '@taskwatch/shared/permissions';
 import * as clock from '../clock.js';
 import { pool } from '../db/pool.js';
-import { isOpenStatus, LEVEL_LABELS, openSql, type Priority } from '../domain.js';
+import { isOpenStatus, LEVEL_LABELS, openSql, taskStage, type Priority } from '../domain.js';
 import { taskLevel } from '../engine/levels.js';
 import { forbidden, notFound } from '../http/errors.js';
-import { can, canView, relation, taskActions, taskPermissions, visibilityFilter } from './access.js';
+import { can, canView, relation, taskActions, taskPermissions, visibilityFilter, ratableRow } from './access.js';
 import { presentKind, presentValues, verifyChains } from './activity.js';
 import type { Directory, DirUser } from './directory.js';
 import { getRuleSet } from './rules.js';
@@ -38,7 +41,8 @@ const TASK_COLUMNS = `
   t.acknowledged_at, t.snooze_until, t.progress, t.review_required, t.parent_id, t.recurring_id, t.occurrence_date,
   t.cancel_reason, t.completed_at, t.closed_at, t.blocked_reason, t.level, t.lead_extension_used,
   t.assignee_id, a.name as assignee_name, t.assigner_id, g.name as assigner_name, t.created_by, t.reviewer_id,
-  t.team_id, tm.name as team_name`;
+  t.team_id, tm.name as team_name, t.target, t.unit, t.achieved, t.result, t.estimated_hours, t.purpose, t.quality_score, t.outcome_score,
+  t.shortfall_reason, t.shortfall_accepted, t.scored`;
 
 const TASK_JOINS = `
   from tasks t
@@ -89,7 +93,18 @@ function toTaskView(r: any, now: Date, rules: Rules, viewer: DirUser, dir: Direc
     clockStartedAt: r.clock_started_at,
     acknowledgedAt: r.acknowledged_at,
     snoozeUntil: r.snooze_until,
-    progress: r.progress,
+    progress: taskProgress({ status: r.status, target: r.target, achieved: r.achieved, progress: r.progress }) ?? r.progress,
+    target: r.target,
+    unit: r.unit,
+    achieved: r.achieved,
+    result: r.result,
+    estimatedHours: r.estimated_hours,
+    purpose: r.purpose,
+    qualityScore: r.quality_score,
+    outcomeScore: r.outcome_score,
+    shortfallReason: r.shortfall_reason,
+    shortfallAccepted: r.shortfall_accepted,
+    awaitingRating: r.status === 'completed' && ratableRow(r, now),
     reviewRequired: r.review_required,
     parentId: r.parent_id,
     recurrenceId: r.recurring_id,
@@ -101,6 +116,7 @@ function toTaskView(r: any, now: Date, rules: Rules, viewer: DirUser, dir: Direc
     entityName: r.entity_name,
     level: info?.level ?? -1,
     levelInfo: info,
+    stage: taskStage(r.status, info?.level ?? -1),
     overdue: active && r.due_at.getTime() < now.getTime(),
     lastUpdateAt: r.clock_started_at,
     escalationAcked: r.top_acked === true,
@@ -197,6 +213,7 @@ export async function assigneeOptions(viewer: DirUser, dir: Directory, assignabl
   const load = new Map(rows.map((r) => [r.id, r.n]));
   const { rows: teams } = await pool.query<{ id: number; name: string }>('select id, name from teams where organization_id = $1', [viewer.organizationId]);
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  const work = await workloadFor(viewer.organizationId, dir, assignable.map((u) => u.id));
   return assignable.map((u) => ({
     id: u.id,
     name: u.name,
@@ -207,6 +224,8 @@ export async function assigneeOptions(viewer: DirUser, dir: Directory, assignabl
     entityId: u.entityId,
     timeZone: u.timeZone,
     openCount: load.get(u.id) ?? 0,
+    // PERF: estimated-hours load over the next 5 working days, for the assignee picker (FRD §5.8).
+    load: { loadPercent: Math.round(work.get(u.id)!.loadPercent), band: work.get(u.id)!.band },
   }));
 }
 
@@ -305,13 +324,66 @@ export async function extensionQueue(viewer: DirUser, dir: Directory, status: (t
   const now = clock.now();
   return rows.map((r) => {
     const task = toTaskView(r, now, rules, viewer, dir);
-    const leadOnceUsed = r.lead_extension_used && relationIsLead(viewer, r, dir);
-    const canDecide = r.ext.status === 'pending' && r.ext.requested_by !== viewer.id && task.actions.includes('decide_extension') && !leadOnceUsed;
-    return { ext: r.ext, task, canDecide };
+    return { ext: r.ext, task, canDecide: mayDecideExtension(viewer, dir, r, task, r.ext) };
   });
 }
 
-const relationIsLead = (viewer: DirUser, r: any, dir: Directory) => relation(viewer, r, dir) === 'lead';
+/** EXT-02 as the queue and the dashboard show it: pending, not one's own request, and FR-5's "a lead extends once". */
+function mayDecideExtension(viewer: DirUser, dir: Directory, r: any, task: { actions: string[] }, ext: { status: string; requested_by: number }) {
+  const leadOnceUsed = r.lead_extension_used && relation(viewer, r, dir) === 'lead';
+  return ext.status === 'pending' && ext.requested_by !== viewer.id && task.actions.includes('decide_extension') && !leadOnceUsed;
+}
+
+/**
+ * DASH-03: every non-draft task in the viewer's scope (D-51: the visibility rule), optionally in one entity, as the
+ * shared dashboard rules read them, with the pending extensions the viewer may decide. Not capped: aggregates need
+ * every row; only capped lists leave the server (D-10).
+ */
+/** `orgWide`: every task in the viewer's organization (RPT-01 org report scope) instead of the visibility filter. */
+export async function dashboardTasks(viewer: DirUser, dir: Directory, entity?: string, orgWide = false): Promise<{ tasks: DashTask[]; extensions: DashExtension[] }> {
+  const vis = orgWide ? { sql: 't.organization_id = $1', params: [viewer.organizationId] } : visibilityFilter(viewer, dir, 't', 1);
+  const params: unknown[] = [...vis.params, viewer.id];
+  const me = `$${params.length}`;
+  if (entity) params.push(entity);
+  const { rows } = await pool.query(
+    `select ${TASK_COLUMNS} ${FACTS(me)},
+       (select row_to_json(x) from extensions x where x.task_id = t.id and x.status = 'pending') as pending_ext
+     ${TASK_JOINS}
+     where ${vis.sql} and t.status <> 'draft' ${entity ? `and t.entity_id = $${params.length}` : ''}`,
+    params,
+  );
+  const rules = await getRuleSet(viewer.organizationId);
+  const now = clock.now();
+  const tasks: DashTask[] = [];
+  const extensions: DashExtension[] = [];
+  for (const r of rows) {
+    const v = toTaskView(r, now, rules, viewer, dir);
+    tasks.push({
+      id: v.id,
+      title: v.title,
+      status: v.status,
+      priority: v.priority,
+      assigneeId: v.assigneeId,
+      assigneeName: v.assignee.name,
+      assignedBy: v.assignedBy,
+      teamId: v.teamId,
+      entityId: v.entityId,
+      createdAt: v.createdAt.getTime(),
+      updatedAt: v.updatedAt.getTime(),
+      dueAt: v.dueAt.getTime(),
+      completedAt: v.completedAt ? v.completedAt.getTime() : null,
+      clockStartedAt: v.clockStartedAt.getTime(),
+      acknowledgedAt: v.acknowledgedAt ? v.acknowledgedAt.getTime() : null,
+      level: v.level,
+      silenceLevel: v.levelInfo?.silenceLevel ?? -1,
+      next: v.levelInfo?.next ? { level: v.levelInfo.next.level, at: v.levelInfo.next.at.getTime() } : null,
+      overdue: v.overdue,
+      mayReview: v.actions.includes('review'),
+    });
+    if (r.pending_ext) extensions.push({ id: r.pending_ext.id, taskId: v.id, at: Date.parse(r.pending_ext.requested_at), mayDecide: mayDecideExtension(viewer, dir, r, v, r.pending_ext) });
+  }
+  return { tasks, extensions };
+}
 
 const brief = (id: number | null, name: string | null) => (id ? { id, name } : null);
 

@@ -9,9 +9,10 @@ import { silenceThresholds } from '../../services/engine/escalation';
 import { describeRecurrence } from '../../services/engine/recurrence';
 import { getDb, now } from '../../services/mock/store';
 import type { Activity, ActivityType, Comment, User } from '../../types';
+import type { TaskView } from '../../services/api/base';
 import { ACTIVE_STATUSES } from '../../types';
 import { bytes, cx, dueLabel, formatDateTime, formatShort, hoursLabel, relative } from '../../utils/format';
-import { AckEscalationDialog, CancelDialog, CompleteDialog, DecideExtensionDialog, ExtensionDialog, ProgressDialog, ReassignDialog, ReopenDialog, ReviewDialog, SubmitDialog, type DialogKind } from './TaskDialogs';
+import { AckEscalationDialog, CancelDialog, CompleteDialog, DecideExtensionDialog, ExtensionDialog, ProgressDialog, ReassignDialog, ReopenDialog, ReviewDialog, SubmitDialog, type DialogKind, RateDialog } from './TaskDialogs';
 
 type Tab = 'activity' | 'updates' | 'comments' | 'reviews' | 'files' | 'assignments' | 'escalations';
 
@@ -54,6 +55,7 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
   if (can('review')) primary.push(<Button key="rev" variant="primary" icon="review" onClick={() => setDialog('review')}>Review submission</Button>);
   if (can('decide_extension')) primary.push(<Button key="dec" icon="clock" onClick={() => setDialog('decide')}>Decide extension</Button>);
   if (can('ack_escalation')) primary.push(<Button key="esc" icon="check" onClick={() => setDialog('ack_escalation')}>Acknowledge escalation</Button>);
+  if (can('rate')) primary.push(<Button key="rate" variant={t.awaitingRating ? 'primary' : 'secondary'} icon="check" onClick={() => setDialog('rate')}>Rate task</Button>);
 
   return (
     <div className="page task-page">
@@ -66,6 +68,7 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
             <LevelBadge level={t.level} acked={t.escalationAcked} long />
             {t.recurrenceId && <Tag tone="info"><Icon name="repeat" size={11} /> Recurring</Tag>}
             {t.reviewRequired && <Tag>Review required</Tag>}
+            {t.awaitingRating && <Tag tone="warn">Awaiting rating{t.completedAt && withinRateWindow(t.completedAt) ? ' · rate within 3 working days' : ''}</Tag>}
           </div>
           <h1>{t.title}</h1>
           <p className="muted">
@@ -277,6 +280,7 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
                 ['Acknowledged', t.acknowledgedAt ? <span key="ack"><Icon name="check" size={12} /> {formatDateTime(t.acknowledgedAt)}</span> : <span className="tone-warn">Not acknowledged</span>],
                 ['Progress', <span key="p" className="row-gap"><ProgressBar value={t.progress} /> {t.progress}%</span>],
                 ['Category', t.category],
+                ...(measuredFacts(t) as [string, ReactNode][]),
                 ...(d.recurrence ? ([['Recurrence', describeRecurrence(d.recurrence)]] as [string, ReactNode][]) : []),
                 ...(d.parent ? ([['Parent', <Link key="pa" to={`/tasks/${d.parent.id}`}>{d.parent.id}</Link>]] as [string, ReactNode][]) : []),
               ]}
@@ -328,6 +332,7 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
       {dialog === 'reassign' && <ReassignDialog task={t} onClose={() => setDialog(null)} />}
       {dialog === 'cancel' && <CancelDialog task={t} onClose={() => setDialog(null)} />}
       {dialog === 'reopen' && <ReopenDialog task={t} onClose={() => setDialog(null)} />}
+      {dialog === 'rate' && <RateDialog task={t} onClose={() => setDialog(null)} />}
       {dialog === 'ack_escalation' && <AckEscalationDialog task={t} eventId={ackEventId} onClose={() => setDialog(null)} />}
     </div>
   );
@@ -367,7 +372,31 @@ const ACT_ICON: Partial<Record<ActivityType, IconName>> = {
   attachment_added: 'clip',
   attachment_removed: 'clip',
   edited: 'edit',
+  rated: 'check',
 };
+
+/** PERF: the 3-working-day rating window after completion (display only; rating stays possible later). */
+function withinRateWindow(completedAt: string): boolean {
+  let d = new Date(completedAt);
+  for (let left = 3; left > 0; ) {
+    d = new Date(d.getTime() + 86_400_000);
+    if (d.getDay() !== 0 && d.getDay() !== 6) left--;
+  }
+  return Date.now() < d.getTime();
+}
+
+/** PERF facts on the task page (server mode; the prototype has none). */
+function measuredFacts(t: TaskView): [string, ReactNode][] {
+  const out: [string, ReactNode][] = [];
+  if (t.target != null) out.push(['Target', `${t.achieved ?? 0} of ${t.target} ${t.unit ?? ''}`]);
+  if (t.estimatedHours != null) out.push(['Estimated effort', `${t.estimatedHours} h`]);
+  if (t.purpose) out.push(['Purpose', t.purpose === 'revenue' ? 'Revenue-oriented' : 'Support']);
+  if (t.result) out.push(['Result', t.result]);
+  if (t.shortfallReason) out.push(['Shortfall / delay reason', `${t.shortfallReason}${t.shortfallAccepted == null ? '' : t.shortfallAccepted ? ' (accepted)' : ' (not accepted)'}`]);
+  if (t.qualityScore != null) out.push(['Quality score', String(t.qualityScore)]);
+  if (t.outcomeScore != null) out.push(['Outcome score', String(t.outcomeScore)]);
+  return out;
+}
 
 function Timeline({ items, users }: { items: Activity[]; users: User[] }) {
   const [filter, setFilter] = useState<'all' | 'progress' | 'system'>('all');

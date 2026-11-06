@@ -9,7 +9,8 @@ import { assignableUsers, can, scopeIds } from './access.js';
 import { appendAdmin } from './audit.js';
 import { getDirectory, hasRole, isFounderOffice, type Directory, type DirUser } from './directory.js';
 import { getSettings } from './settings.js';
-import { createTask, guardText, teamEntityOf } from './tasks.js';
+import { createTask, guardText, measuredErrors, teamEntityOf } from './tasks.js';
+import type { Purpose } from '@taskwatch/shared/performance';
 
 // FR-7 recurring schedules (REC-01…04). Occurrence days follow the assignee's zone (D-5); missed days are not
 // backfilled and days 29–31 clamp to the month end (D-45); an occurrence the owner may no longer assign is skipped
@@ -25,6 +26,10 @@ export interface ScheduleInput extends RecurrenceRule {
   teamId: number | null;
   reviewRequired: boolean;
   dueHour: number;
+  target: number | null;
+  unit: string | null;
+  estimatedHours: number | null;
+  purpose: Purpose | null;
 }
 
 const COLUMNS = `r.*, r.start_date::text as start_day, r.end_date::text as end_day`;
@@ -83,6 +88,10 @@ export async function listRecurring(actor: DirUser) {
       reviewRequired: r.review_required,
       ...rule(r),
       dueHour: r.due_hour,
+      target: r.target,
+      unit: r.unit,
+      estimatedHours: r.estimated_hours,
+      purpose: r.purpose,
       active: r.active,
       createdAt: r.created_at,
       summary: describeRecurrence(rule(r)),
@@ -101,7 +110,7 @@ export async function saveRecurring(actor: DirUser, id: number | null, p: Schedu
   const saved = await tx(async (c) => {
     const existing = id === null ? null : await lockOwned(c, actor, dir, id, 'edit');
     guardText(p.title, p.description);
-    const f = scheduleErrors(p);
+    const f = { ...scheduleErrors(p), ...measuredErrors(p, true) };
     if (!(await getSettings(actor.organizationId)).categories.includes(p.category)) f.category = 'Choose a category.';
     const assignee = p.assigneeId === null ? undefined : dir.get(p.assigneeId);
     // An unchanged assignee is not re-checked: the owner may keep editing after the assignee moved (REC-02).
@@ -118,19 +127,21 @@ export async function saveRecurring(actor: DirUser, id: number | null, p: Schedu
     }
     if (Object.keys(f).length) throw invalid(f);
     const values = [p.title.trim(), p.description, p.category, p.priority, p.assigneeId, teamId, entityId, p.reviewRequired, p.frequency, p.interval,
-      p.frequency === 'weekly' ? [...new Set(p.weekdays)].sort() : [], p.startDate, p.endDate, p.dueHour];
+      p.frequency === 'weekly' ? [...new Set(p.weekdays)].sort() : [], p.startDate, p.endDate, p.dueHour,
+      p.target, p.target === null ? null : p.unit, p.estimatedHours, p.purpose];
     const fields = `title = $1, description = $2, category = $3, priority = $4, assignee_id = $5, team_id = $6, entity_id = $7,
-       review_required = $8, frequency = $9, "interval" = $10, weekdays = $11, start_date = $12, end_date = $13, due_hour = $14`;
+       review_required = $8, frequency = $9, "interval" = $10, weekdays = $11, start_date = $12, end_date = $13, due_hour = $14,
+       target = $15, unit = $16, estimated_hours = $17, purpose = $18`;
     let sid: number;
     if (existing) {
       // Edits shape future occurrences only; today's is re-evaluated, and the unique key stops a second task for it.
-      await c.query(`update recurring_tasks set ${fields}, last_occurrence = null where id = $15`, [...values, existing.id]);
+      await c.query(`update recurring_tasks set ${fields}, last_occurrence = null where id = $19`, [...values, existing.id]);
       sid = existing.id;
     } else {
       const { rows } = await c.query<{ id: number }>(
         `insert into recurring_tasks (title, description, category, priority, assignee_id, team_id, entity_id, review_required, frequency,
-           "interval", weekdays, start_date, end_date, due_hour, created_by, created_at, organization_id, active)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,true) returning id`,
+           "interval", weekdays, start_date, end_date, due_hour, target, unit, estimated_hours, purpose, created_by, created_at, organization_id, active)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,true) returning id`,
         [...values, actor.id, clock.now(), actor.organizationId],
       );
       sid = rows[0]!.id;
@@ -215,6 +226,10 @@ export async function runRecurring(only?: number): Promise<number> {
           dueAt,
           startAt: null,
           reviewRequired: claimed.review_required,
+          target: claimed.target,
+          unit: claimed.unit,
+          estimatedHours: claimed.estimated_hours,
+          purpose: claimed.purpose,
           parentId: null,
         },
         { recurringId: claimed.id, occurrenceDate: claimed.today },

@@ -1,0 +1,198 @@
+// PERF (PERFORMANCE-FRD §3, §5): team leaderboards, person breakdowns and workload, computed on the server from the
+// shared formulas. Scope: one's own team for everyone; teams in one's reporting line with view_team_reports; every team
+// in the organization with view_org_reports. A team or person outside that scope is reported as missing (404).
+import {
+  isEligible,
+  isOnTime,
+  periodBounds,
+  personScore,
+  rankRows,
+  taskOutcome,
+  WEIGHTS,
+  workload,
+  type Priority,
+  type ScoredTask,
+} from '@taskwatch/shared/performance';
+import { LADDER_STATUSES, type Status } from '@taskwatch/shared/workflow';
+import { zonedInstant } from '@taskwatch/shared/levels';
+import * as clock from '../clock.js';
+import { pool } from '../db/pool.js';
+import { invalid, notFound } from '../http/errors.js';
+import { can } from './access.js';
+import type { Directory, DirUser } from './directory.js';
+import { getSettings } from './settings.js';
+
+export type PeriodQuery = { period: 'week' | 'month' | 'custom'; from?: string; to?: string };
+
+/** [from, to) in the organization's zone; custom dates are inclusive days. */
+export async function resolvePeriod(organizationId: number, q: PeriodQuery): Promise<{ from: Date; to: Date; zone: string }> {
+  const zone = (await getSettings(organizationId)).timezone;
+  if (q.period !== 'custom') return { ...periodBounds(q.period, clock.now(), zone), zone };
+  const day = (s: string | undefined, field: 'from' | 'to') => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? '');
+    if (!m) throw invalid({ [field]: 'Choose a date.' });
+    return [Number(m[1]), Number(m[2]), Number(m[3])] as const;
+  };
+  const [fy, fm, fd] = day(q.from, 'from');
+  const [ty, tm, td] = day(q.to, 'to');
+  const from = new Date(zonedInstant(zone, fy, fm, fd, 0, 0));
+  const to = new Date(zonedInstant(zone, ty, tm, td, 0, 0) + 86_400_000); // end of the "to" day (approximate across DST)
+  if (to <= from) throw invalid({ to: 'The end date must be on or after the start date.' });
+  return { from, to, zone };
+}
+
+/** Team ids the viewer may see boards for. */
+export function visibleTeamIds(viewer: DirUser, dir: Directory): Set<number> | 'all' {
+  if (can(viewer, dir, 'view_org_reports')) return 'all';
+  const out = new Set<number>();
+  if (viewer.teamId !== null) out.add(viewer.teamId);
+  if (can(viewer, dir, 'view_team_reports')) {
+    for (const id of dir.descendants(viewer.id)) {
+      const t = dir.get(id)?.teamId;
+      if (t != null) out.add(t);
+    }
+  }
+  return out;
+}
+
+/** GET /api/performance/teams: the boards the viewer may open, for the team picker. */
+export async function visibleTeams(viewer: DirUser, dir: Directory) {
+  const visible = visibleTeamIds(viewer, dir);
+  const { rows } = await pool.query<{ id: number; name: string }>(
+    'select id, name from teams where organization_id = $1 and archived_at is null order by name',
+    [viewer.organizationId],
+  );
+  return rows.filter((t) => visible === 'all' || visible.has(t.id));
+}
+
+async function loadTeam(viewer: DirUser, dir: Directory, teamId: number) {
+  const visible = visibleTeamIds(viewer, dir);
+  if (visible !== 'all' && !visible.has(teamId)) throw notFound('Team not found.');
+  const { rows } = await pool.query<{ id: number; name: string }>(
+    'select id, name from teams where id = $1 and organization_id = $2 and archived_at is null',
+    [teamId, viewer.organizationId],
+  );
+  if (!rows[0]) throw notFound('Team not found.');
+  const members = dir.all().filter((u) => u.active && u.teamId === teamId);
+  return { team: rows[0], members };
+}
+
+/** Scored, non-draft, non-cancelled tasks of these people due in [from, to), as the shared formulas take them. */
+async function scoredTasks(organizationId: number, userIds: number[], from: Date, to: Date) {
+  const { rows } = await pool.query(
+    `select t.id, t.title, t.assignee_id, t.status, t.due_at, t.completed_at, t.target, t.achieved, t.outcome_score, t.quality_score,
+            t.shortfall_accepted, t.scored, t.priority,
+            t.review_required and t.quality_score is not null as reviewed,
+            coalesce((select max(a.assigned_at) from assignments a where a.task_id = t.id and a.assignee_id = t.assignee_id), t.assigned_at) > t.due_at
+              as reassigned_after_due,
+            (select count(*)::int from reviews r where r.task_id = t.id and r.decision = 'changes_requested') as rework,
+            (select r.submitted_at from reviews r where r.task_id = t.id and (r.decision = 'approved' or (r.decision is null and t.status = 'submitted'))
+              order by r.round desc limit 1) as submitted_at
+       from tasks t
+      where t.organization_id = $1 and t.assignee_id = any($2) and t.scored and t.status not in ('draft', 'cancelled')
+        and t.due_at >= $3 and t.due_at < $4`,
+    [organizationId, userIds, from, to],
+  );
+  return rows.map((r) => ({
+    title: r.title as string,
+    assigneeId: r.assignee_id as number,
+    task: {
+      id: r.id,
+      status: r.status as Status,
+      dueAt: r.due_at,
+      completedAt: r.completed_at,
+      target: r.target,
+      achieved: r.achieved,
+      outcomeScore: r.outcome_score,
+      qualityScore: r.quality_score,
+      reviewed: r.reviewed === true,
+      shortfallAccepted: r.shortfall_accepted,
+      reassignedAfterDue: r.reassigned_after_due === true,
+      scored: r.scored,
+      priority: r.priority as Priority,
+      reworkCount: r.rework,
+      submittedAt: r.submitted_at ?? null,
+    } satisfies ScoredTask,
+  }));
+}
+
+/** GET /api/performance/leaderboard */
+export async function leaderboard(viewer: DirUser, dir: Directory, teamId: number, q: PeriodQuery) {
+  const { team, members } = await loadTeam(viewer, dir, teamId);
+  const { from, to } = await resolvePeriod(viewer.organizationId, q);
+  const rows = await scoredTasks(viewer.organizationId, members.map((m) => m.id), from, to);
+  const now = clock.now();
+  const scored = members.map((m) => {
+    const s = personScore(rows.filter((r) => r.assigneeId === m.id).map((r) => r.task), from, to, now);
+    return { userId: m.id, name: m.name, ...s };
+  });
+  return { team, from, to, weights: WEIGHTS, rows: rankRows(scored) };
+}
+
+/** GET /api/performance/people/:id — the tasks behind a person's score, with why any is left out. */
+export async function personBreakdown(viewer: DirUser, dir: Directory, personId: number, q: PeriodQuery) {
+  const person = dir.get(personId);
+  // Employees open only themselves; supervisors with team reports open people below them; org reports open anyone.
+  const allowed =
+    !!person &&
+    (personId === viewer.id || can(viewer, dir, 'view_org_reports') || (can(viewer, dir, 'view_team_reports') && dir.descendants(viewer.id).has(personId)));
+  if (!person || !allowed) throw notFound('Person not found.');
+  const { from, to } = await resolvePeriod(viewer.organizationId, q);
+  const now = clock.now();
+  const rows = await scoredTasks(viewer.organizationId, [personId], from, to);
+  const tasks = rows.map(({ title, task }) => {
+    const outcome = taskOutcome(task, now);
+    const excluded = !isEligible(task, from, to, now)
+      ? 'not_due'
+      : task.shortfallAccepted === true
+        ? 'accepted'
+        : outcome === null
+          ? 'not_rated'
+          : task.reassignedAfterDue
+            ? 'reassigned_after_due'
+            : !task.reviewed
+              ? 'pending_review'
+              : null;
+    return {
+      id: task.id,
+      title,
+      dueAt: task.dueAt,
+      completedAt: task.completedAt,
+      outcome,
+      onTime: isOnTime(task, now),
+      quality: task.qualityScore,
+      reviewed: task.reviewed,
+      reworkCount: task.reworkCount,
+      excluded,
+    };
+  });
+  return { person: { id: person.id, name: person.name, teamId: person.teamId }, from, to, weights: WEIGHTS, score: personScore(rows.map((r) => r.task), from, to, now), tasks };
+}
+
+/** Open load per person (FRD §5.8). */
+export async function workloadFor(organizationId: number, dir: Directory, userIds: number[]) {
+  const settings = await getSettings(organizationId);
+  const { rows } = await pool.query(
+    `select assignee_id, status, due_at, estimated_hours, priority from tasks
+      where organization_id = $1 and assignee_id = any($2) and status = any($3)`,
+    [organizationId, userIds, [...LADDER_STATUSES]],
+  );
+  const now = clock.now();
+  return new Map(
+    userIds.map((id) => [
+      id,
+      workload(
+        rows.filter((r) => r.assignee_id === id).map((r) => ({ status: r.status as Status, dueAt: r.due_at, estimatedHours: r.estimated_hours, priority: r.priority as Priority })),
+        { now, zone: dir.get(id)?.timeZone ?? settings.timezone, workdayStart: settings.workdayStart, workdayEnd: settings.workdayEnd },
+      ),
+    ]),
+  );
+}
+
+/** GET /api/workload */
+export async function teamWorkload(viewer: DirUser, dir: Directory, teamId: number) {
+  const { team, members } = await loadTeam(viewer, dir, teamId);
+  const load = await workloadFor(viewer.organizationId, dir, members.map((m) => m.id));
+  return { team, rows: members.map((m) => ({ userId: m.id, name: m.name, ...load.get(m.id)! })) };
+}
+

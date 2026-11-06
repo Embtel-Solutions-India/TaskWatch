@@ -46,8 +46,8 @@ import {
   reassignTask,
   reopenTask,
   requestExtension,
+  rateTask,
   reviewTask,
-  setStatus,
   startTask,
   submitTask,
   updateTask,
@@ -114,6 +114,17 @@ tasksRouter.get('/tasks/options/parents', async (req, res) => {
 
 /* ---------- Create and edit (TASK-01…03) ---------- */
 
+/** PERF: a 0–100 integer score from a reviewer or giver. */
+const score = (error: string) => z.number({ error }).int({ error }).min(0, { error }).max(100, { error }).optional();
+
+/** PERF (FRD §4): the giver's measures, shared by the task and recurring-schedule bodies. */
+export const measuredFields = {
+    target: z.number({ error: 'Enter a target above 0.' }).positive({ error: 'Enter a target above 0.' }).nullable().default(null),
+    unit: z.string().trim().max(40, { error: 'Keep the unit under 40 characters.' }).default(''),
+    estimatedHours: z.number({ error: 'Between 0.25 and 200 hours.' }).min(0.25, { error: 'Between 0.25 and 200 hours.' }).max(200, { error: 'Between 0.25 and 200 hours.' }).nullable().default(null),
+    purpose: z.enum(['revenue', 'support'], { error: 'Choose revenue or support.' }).nullable().default(null),
+};
+
 const taskBody = z
   .object({
     title: z.string({ error: 'Give the task a title of at least 4 characters.' }).max(1000),
@@ -128,6 +139,7 @@ const taskBody = z
     startDate: z.string().regex(DATE, { error: 'Enter a valid date.' }).nullable().optional(),
     reviewRequired: z.boolean().default(false),
     parentId: z.number().int().nullable().default(null),
+    ...measuredFields,
   })
   .strict();
 
@@ -149,6 +161,10 @@ function toTaskInput(req: Request, b: z.infer<typeof taskBody>): TaskInput {
     startAt: b.startDate ? dueFrom(b.startDate, '00:00', tz) : null,
     reviewRequired: b.reviewRequired,
     parentId: b.parentId,
+    target: b.target,
+    unit: b.unit || null,
+    estimatedHours: b.estimatedHours,
+    purpose: b.purpose,
   };
 }
 
@@ -232,17 +248,33 @@ action('acknowledge', empty, (req, id) => acknowledgeTask(me(req).user, id));
 action('start', empty, (req, id) => startTask(me(req).user, id));
 action(
   'progress',
-  z.object({ message: z.string().max(5000).default(''), percent: z.coerce.number().optional() }).strict(),
-  (req, id, b) => postProgress(me(req).user, id, { message: b.message, percent: b.percent, files: uploadsOf(req) }),
+  z.object({ message: z.string().max(5000).default(''), percent: z.coerce.number().optional(), achieved: z.coerce.number({ error: 'Enter a number of 0 or more.' }).min(0, { error: 'Enter a number of 0 or more.' }).optional() }).strict(),
+  (req, id, b) => postProgress(me(req).user, id, { message: b.message, percent: b.percent, achieved: b.achieved, files: uploadsOf(req) }),
   true,
 );
 action('block', reasonOnly, (req, id, b) => blockTask(me(req).user, id, b.reason));
-action('submit', z.object({ note: z.string().max(5000).default('') }).strict(), (req, id, b) => submitTask(me(req).user, id, { note: b.note, files: uploadsOf(req) }), true);
-action('complete', z.object({ note: z.string().max(1000).default('') }).strict(), (req, id, b) => completeTask(me(req).user, id, b.note));
+action('submit', z.object({ note: z.string().max(5000).default(''), achieved: z.coerce.number({ error: 'Enter a number of 0 or more.' }).min(0, { error: 'Enter a number of 0 or more.' }).optional(), result: z.string().max(1000, { error: 'Keep the result under 1000 characters.' }).optional(), shortfallReason: z.string().max(500, { error: 'Keep the reason under 500 characters.' }).optional() }).strict(), (req, id, b) => submitTask(me(req).user, id, { ...b, files: uploadsOf(req) }), true);
+action('complete', z.object({ note: z.string().max(1000).default(''), achieved: z.coerce.number({ error: 'Enter a number of 0 or more.' }).min(0, { error: 'Enter a number of 0 or more.' }).optional(), result: z.string().max(1000, { error: 'Keep the result under 1000 characters.' }).optional(), shortfallReason: z.string().max(500, { error: 'Keep the reason under 500 characters.' }).optional() }).strict(), (req, id, b) => completeTask(me(req).user, id, b.note, b));
 action(
   'review',
-  z.object({ decision: z.enum(['approved', 'changes_requested', 'rejected'], { error: 'Choose a decision.' }), comment: z.string().max(2000).default('') }).strict(),
+  z
+    .object({
+      decision: z.enum(['approved', 'changes_requested', 'rejected'], { error: 'Choose a decision.' }),
+      comment: z.string().max(2000).default(''),
+      qualityScore: score('Give a quality score from 0 to 100.'),
+      outcomeScore: score('Give an outcome score from 0 to 100.'),
+      shortfallAccepted: z.boolean().optional(),
+    })
+    .strict(),
   (req, id, b) => reviewTask(me(req).user, id, b),
+);
+action(
+  'rate',
+  z
+    .object({ outcomeScore: score('Give an outcome score from 0 to 100.'), shortfallAccepted: z.boolean({ error: 'Choose yes or no.' }).optional() })
+    .strict()
+    .refine((b) => b.outcomeScore !== undefined || b.shortfallAccepted !== undefined, { error: 'Give an outcome score or decide on the shortfall.' }),
+  (req, id, b) => rateTask(me(req).user, id, b),
 );
 action('reassign', z.object({ toId: z.number().int().optional(), reason: z.string().max(1000).default('') }).strict(), (req, id, b) => reassignTask(me(req).user, id, b));
 action('cancel', reasonOnly, (req, id, b) => cancelTask(me(req).user, id, b.reason));
@@ -310,12 +342,6 @@ tasksRouter.post('/tasks/:id/updates', uploadLimit, upload.single('file'), async
   res.status(201).json({ ok: true });
 });
 
-tasksRouter.post('/tasks/:id/status', async (req, res) => {
-  const { user } = me(req);
-  const body = z.object({ status: z.enum(['done', 'open']), note: text(1000) }).parse(req.body);
-  await setStatus(user, idParam(req), body.status, body.note);
-  res.json({ ok: true });
-});
 
 /* ---------- Comments, files, escalation acknowledgement (T-4.10, T-4.11, Phase 5 rework them) ---------- */
 

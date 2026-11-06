@@ -4,6 +4,7 @@ import type { Column } from '../../components/DataTable';
 import { Icon } from '../../components/icons';
 import { Avatar, Button, Input, LevelBadge, Menu, PriorityBadge, ProgressBar, Select, StatusBadge } from '../../components/ui';
 import { useAction, useLocalState, useMe } from '../../hooks';
+import { taskStage } from '@taskwatch/shared/insights';
 import type { TaskView } from '../../services/api/base';
 import { acknowledgeTask } from '../../services/api/tasks';
 import { allowedActions } from '../../services/engine/workflow';
@@ -72,8 +73,17 @@ function RowActions({ t }: { t: TaskView }) {
   );
 }
 
+const STAGE_LABEL = { on_track: 'On track', amber: 'Amber (L0–L1)', red: 'Red (L2–L3)' } as const;
+
+/** TASK-10 stage stripe (D-49); none for closed and draft tasks. */
+function StageStripe({ t }: { t: TaskView }) {
+  const stage = taskStage(t.status, t.level);
+  return stage ? <span className={`stage-stripe stage-${stage}`} role="img" aria-label={STAGE_LABEL[stage]} title={STAGE_LABEL[stage]} /> : null;
+}
+
 export function taskColumns(opts: { hideAssignee?: boolean; hideGiver?: boolean } = {}): Column<TaskView>[] {
   return [
+    { id: 'stage', header: 'Stage', width: '64px', cell: (t) => <StageStripe t={t} />, sort: (t) => ['on_track', 'amber', 'red'].indexOf(taskStage(t.status, t.level) ?? '') },
     { id: 'id', header: 'ID', fixed: true, width: '88px', cell: (t) => <span className="mono">{t.id}</span>, sort: (t) => Number(t.id.split('-')[1]) },
     { id: 'title', header: 'Title', fixed: true, cell: (t) => <TaskTitle t={t} />, sort: (t) => t.title },
     { id: 'priority', header: 'Priority', width: '110px', cell: (t) => <PriorityBadge priority={t.priority} />, sort: (t) => PRIORITY_ORDER[t.priority] },

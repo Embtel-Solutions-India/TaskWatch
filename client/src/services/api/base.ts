@@ -56,6 +56,8 @@ export function findUser(db: Db, id: string): User {
 }
 
 export interface TaskView extends Task {
+  /** PERF (server): a finished task waiting for the giver's Rate step. */
+  awaitingRating?: boolean;
   level: number;
   levelInfo: LevelResult | null;
   assignee: User | undefined;
@@ -68,6 +70,8 @@ export interface TaskView extends Task {
   actions?: TaskAction[];
   /** Why the task is Blocked (WF-11). */
   blockedReason?: string | null;
+  /** TASK-09 "Escalated to me": an unresolved L1+ escalation names the viewer as a "to" recipient. Lists only. */
+  escalatedToMe?: boolean;
 }
 
 export function toView(db: Db, t: Task): TaskView {

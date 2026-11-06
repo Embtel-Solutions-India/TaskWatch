@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DataTable } from '../../components/DataTable';
 import { Banner, Button, ErrorState, Input, PageHeader, Select, Tag } from '../../components/ui';
-import { useApi } from '../../hooks';
-import { listAudit } from '../../services/api/admin';
+import { useAction, useApi } from '../../hooks';
+import { checkAuditChain, listAudit } from '../../services/api/admin';
 import { getDb } from '../../services/mock/store';
 import { BACKEND } from '../../services/http';
 import type { AuditRecord } from '../../types';
@@ -11,6 +11,7 @@ import { downloadCsv, formatDateTime } from '../../utils/format';
 
 export function AuditPage() {
   const q = useApi(['audit'], listAudit);
+  const check = useAction(checkAuditChain, { success: (r) => (r.ok ? 'Integrity check passed: no log row was changed or removed.' : `Integrity check found ${r.breaks.length} problem(s). The Chief of Staff has been alerted.`) });
   const db = getDb();
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -50,9 +51,16 @@ export function AuditPage() {
         title="Audit Logs"
         description="Every change made through TaskWatch, with who made it, what changed and why."
         actions={
+          <>
+          {BACKEND === 'server' && (
+            <Button icon="shield" loading={check.pending} onClick={() => check.run()}>
+              Check integrity now
+            </Button>
+          )}
           <Button icon="download" disabled={!filtered.length} onClick={() => downloadCsv('taskwatch-audit.csv', [['Timestamp', 'Actor', 'Action', 'Target type', 'Target', 'Task ID', 'Previous', 'New', 'Source', 'Context'], ...filtered.map((r) => [r.at, name(r.actorId), r.action, r.targetType, r.targetId, r.taskId, r.prev, r.next, r.source, r.context])])}>
             Export CSV
           </Button>
+          </>
         }
       />
       <Banner tone="info" icon="shield">

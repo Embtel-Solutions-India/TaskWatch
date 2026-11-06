@@ -10,10 +10,13 @@ import { cx, formatDateTime, formatShort, relative } from '../../utils/format';
 import { BACKEND } from '../../services/http';
 import { getDb } from '../../services/mock/store';
 import type { Delivery } from '../../types';
+import { WHATSAPP_ENABLED } from '@taskwatch/shared/notifications';
 
 /** Email/WhatsApp status of one notification: from the server row, or the prototype's store. */
 const tagsOf = (n: { id: string; deliveries?: { channel: Delivery['channel']; status: Delivery['status'] }[] }): Pick<Delivery, 'channel' | 'status' | 'heldUntil'>[] =>
-  n.deliveries?.map((d) => ({ ...d, heldUntil: null })) ?? getDb().deliveries.filter((d) => d.notificationId === n.id);
+  (n.deliveries?.map((d) => ({ ...d, heldUntil: null })) ?? getDb().deliveries.filter((d) => d.notificationId === n.id))
+    // D-106: past WhatsApp rows stay stored but are not shown while WhatsApp is off.
+    .filter((d) => WHATSAPP_ENABLED || d.channel !== 'whatsapp');
 
 const TAG_TEXT: Partial<Record<Delivery['status'], string>> = { sent: 'sent', simulated: 'simulated', pending: 'queued', sending: 'queued', failed: 'failed', skipped: 'skipped' };
 

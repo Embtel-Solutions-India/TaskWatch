@@ -311,6 +311,7 @@ It then regenerates the session, stores the user id and redirects to `/`. [V-S `
 - AUTH-05-AC-1: Without `manage_staff`, the call returns 403 and writes no token.
 - AUTH-05-AC-2: A successful call writes the audit entry `staff.access_reset` and returns no token in the body.
 - AUTH-05-AC-3: After the reset, the target user's existing sessions return 401. (Was: TOTP enrolment cleared; removed by D-94.)
+- AUTH-05-AC-4 (D-98, owner 2026-11-06): a non-CoS holder may reset only themselves and people below them in the reporting line (else 403); anyone may reset their own access (their own sessions end too). The lookup never crosses organizations (KI-39).
 
 **Test scenarios.**
 - Authorised reset.

@@ -4,6 +4,7 @@ import { ROLE_LABEL } from '../constants';
 import { Icon } from '../components/icons';
 import { Avatar, Button, IconButton, Popover } from '../components/ui';
 import { DemoBar } from '../features/demo/DemoBar';
+import { ServerClockBar } from '../features/demo/ServerClockBar';
 import { useAction, useApi, useAuth, useLocalState, useMediaQuery } from '../hooks';
 import { listNotifications, logout, markAllRead, markRead } from '../services/api/misc';
 import { sessionApi } from '../services/api/session';
@@ -15,7 +16,7 @@ import { canViewTask, hasPerm } from '../services/authz/permissions';
 import { cx, relative } from '../utils/format';
 import { getThemePref, resolvedTheme, setThemePref, type ThemePref } from '../utils/theme';
 import { NOTIFICATION_LABEL } from '../constants';
-import { crumbs, ROUTES, type BadgeKey, type NavSection } from './routes';
+import { crumbs, ROUTES, supervises, supervisesOnServer, type BadgeKey, type NavSection } from './routes';
 import { SearchPalette } from './SearchPalette';
 
 function useBadges(): Record<BadgeKey, number> {
@@ -65,7 +66,11 @@ export function Shell({ children }: { children: ReactNode }) {
   }, []);
 
   const sections: NavSection[] = ['General', 'Management', 'Administration'];
-  const items = ROUTES.filter((r) => r.nav && (!r.allow || r.allow(db, user)));
+  const allowed = (r: (typeof ROUTES)[number]) =>
+    BACKEND === 'server' && r.allow === supervises && bootstrap
+      ? supervisesOnServer(bootstrap.permissions, bootstrap.user.roles, bootstrap.user.reportCount)
+      : !r.allow || r.allow(db, user);
+  const items = ROUTES.filter((r) => r.nav && allowed(r));
   const trail = crumbs(loc.pathname);
   const isCollapsed = collapsed && !mobile;
 
@@ -130,7 +135,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <a href="#main" className="skip-link">
         Skip to content
       </a>
-      {BACKEND === 'mock' && <DemoBar />}
+      {BACKEND === 'mock' ? <DemoBar /> : <ServerClockBar />}
       <div className={cx('layout', isCollapsed && 'is-collapsed')}>
         {sidebar}
         {mobile && drawer && <div className="scrim" onClick={() => setDrawer(false)} aria-hidden />}

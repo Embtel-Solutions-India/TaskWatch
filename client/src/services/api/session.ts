@@ -17,6 +17,7 @@ export interface Bootstrap {
     timezone: string;
     zone: string;
     manager: { id: number; name: string } | null;
+    reportCount: number;
   };
   permissions: Permission[];
   settings: { orgName: string; timezone: string; categories: string[]; sessionTimeoutMinutes: number; workdayStart: string; workdayEnd: string };

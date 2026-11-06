@@ -369,6 +369,10 @@ export async function seed(): Promise<void> {
           startAt: null,
           reviewRequired: false,
           parentId: null,
+          target: null,
+          unit: null,
+          estimatedHours: 2,
+          purpose: 'support',
         });
         taskIds.set(s, id);
       },
@@ -427,7 +431,7 @@ export async function seed(): Promise<void> {
 
   // Recurring schedules (FR-7) start from today (the monthly one from the 5th of this month).
   const today = realNow.toISOString().slice(0, 10);
-  const base = { description: '', teamId: null, reviewRequired: false, interval: 1, weekdays: [] as number[], endDate: null };
+  const base = { description: '', teamId: null, reviewRequired: false, interval: 1, weekdays: [] as number[], endDate: null, target: null, unit: null, estimatedHours: 1, purpose: 'support' as const };
   await saveRecurring(person('maria'), null, {
     ...base, title: 'Weekly case review — Family team', category: 'Client delivery', assigneeId: ids.get('priya')!, priority: 'normal',
     description: 'Review every open family-based case: next action, owner and deadline.', frequency: 'weekly', weekdays: [1], startDate: today, dueHour: 18,

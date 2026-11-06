@@ -4,6 +4,8 @@
 > Common rules C-1..C-7 live in [PRODUCT_REQUIREMENTS.md §2](../PRODUCT_REQUIREMENTS.md). Base terms (open now, active, level, overdue) are defined once in [DASHBOARD-FRD.md §1.1](DASHBOARD-FRD.md#11-base-definitions).
 > Nothing here has been executed. No test has been run.
 
+> **Built 2026-11-07 (Phase 9, T-9.1…T-9.4).** Rules for the nine reports and their CSV columns live only in `shared/reports.ts` (`buildReport`, `reportCsv`, `rangeBounds`); the server (`services/reports.ts`, `routes/reports.ts`) and the mock (`services/api/misc.ts`) both call them. Scope: one resolver `reportScope` (org with `view_org_reports`, else team, else 403) on every `/api/reports*` route, FR-11 included (D-123). Team scope = the task visibility filter (D-51). Reassignments are counted from `reassign` log rows (server assignment rows have no `from_id`). Unknown filter ids return 422, not empty. The FR-11 view is `/reports/entities` (CSV + PDF), **server mode only**: the prototype has no first-response data. Exports moved from `/api/dashboard/export.*`. Tests: `server/test/reports.test.ts` (pure, 9 cases incl. IST/PT boundaries) and the RPT block in `api.test.ts`.
+
 ## 0. Requirement
 
 WO FR-11: "Accountability dashboard: by entity (open, on track, amber, red, longest silence) and by person (open tasks, average first response, escalations, on-time %). Exportable to CSV and PDF." WO AC-8: "Dashboard figures for one entity match a manual count on a sample of 20 tasks." [WO]

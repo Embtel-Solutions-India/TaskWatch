@@ -1,6 +1,6 @@
 # Active Work
 
-_Last updated: 2026-11-06_
+_Last updated: 2026-11-07_
 
 | Item | Owner | Status | Next action |
 |---|---|---|---|
@@ -22,12 +22,16 @@ _Last updated: 2026-11-06_
 | T-1.16 client HTTP transport | AI agent | CODE_COMPLETE | Foundation complete |
 | Auth phase (T-2.1…T-2.7) | AI agent | Security review done, fixes in; 7 features in REVIEW, AUTH-01a TESTING, AUTH-07/08 REMOVED (D-94) | Owner runs `npm test`; then DONE |
 | Task core phase (T-4.x) | AI agent | DONE 2026-11-05 | — |
+| Phase 9 Reports + Phase 10 Demo (T-10.1) | AI agent | CODE_COMPLETE 2026-11-07 | Owner: start Postgres (admin), `npm test`, `npm run e2e`, reports smoke, server-mode browser check with `DEMO_TOOLS=true` |
 | Escalation phase (T-5.x) | AI agent | DONE 2026-11-05 | — |
 | Notifications phase (T-6.x) | AI agent | Code-complete 2026-11-05 (Batch A green; Batch B written) | Owner runs `npm test` + `npm run e2e` |
+| Performance-scope brief (gap analysis) | AI agent | Written 2026-11-06 | Owner / Founder's Office: D-110 (scope), then D-111…D-121 |
 | Recurring phase (T-7.x) | AI agent | Code-complete 2026-11-06 (Batch A server, Batch B client) | Owner runs `npm test` + `npm run e2e` |
+| Dashboards phase (T-8.x) | AI agent | DONE 2026-11-07 (owner green) | Next: Phase 9 Reports |
 | Org/permissions phase (T-3.x) | AI agent | T-3.0…T-3.8 CODE_COMPLETE (dev at 008); phase code-complete | Owner runs e2e + npm test; then Phase 4; T-3.9 gated on KI-22 |
 
 Waiting on the user:
 - Run `npm test` after setting `ALLOW_DEV_LOGIN=true` in `.env` (KI-21).
 - D-98, D-99 (auth review).
 - WO-D2…D7 confirmation from the Founder's Office.
+| Phase 9 Reports (T-9.1…T-9.4) | AI agent | CODE_COMPLETE | Owner: start Postgres; `npm test` + `npm run e2e`; dev smoke `server/smoke-reports.mts` |

@@ -35,4 +35,7 @@ Evidence tags used everywhere:
 - **[OPEN]**: undecided
 
 ## Superseded drafts
-[FRD.md](FRD.md) and [IMPLEMENTATION_TRACKER.md](IMPLEMENTATION_TRACKER.md) are the first drafts. Their content has moved into 01-discovery and 02-product-requirements. They are kept until the owner approves removing them.
+The first drafts (`FRD.md`, `IMPLEMENTATION_TRACKER.md`) are gone; their content lives in 01-discovery and 02-product-requirements.
+
+## Proposed scope expansion
+[PERFORMANCE_SCOPE_GAP_ANALYSIS](01-discovery/PERFORMANCE_SCOPE_GAP_ANALYSIS.md) compares the current system with the 2026-11-06 brief (outcomes, time, performance, leaderboards) and the BAIS spreadsheet. Open decisions D-110…D-121.

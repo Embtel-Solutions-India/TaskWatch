@@ -511,6 +511,8 @@ Open views sort by level descending, then due ascending [V-S `services/queries.t
 
 ## TASK-10 Stage stripe and summary tiles (new, from WO)
 
+**Built 2026-11-06 (T-8.3; server).** Every TaskView carries `stage` (`domain.ts taskStage`); `GET /api/tasks/summary` already returned the tiles. New test TC-TASK-10-02. **Client built 2026-11-06 (T-8.5):** a Stage column (stripe) on every task list; summary tiles (Open, On track, Amber, Red, Blocked, Escalated to me) and the FR-10 quick views (All open, Escalated to me, Red, Blocked, Closed) next to the existing All / Needs attention / In review (D-20). Deviation: the list tiles are counted from the page's own rows, so they always match the list below; `GET /api/tasks/summary` stays for other callers. TaskView carries `escalatedToMe` (server: `myEscalation`; mock: the same rule). `?view=red` etc. opens a view directly.
+
 **Description.** Each task row carries a colour stage, and the list page shows summary tiles. [WO FR-10 "task list with stage stripe … summary tiles"]
 
 **Roles.** Everyone (over visible tasks).

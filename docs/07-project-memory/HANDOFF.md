@@ -2,6 +2,67 @@
 
 Each session appends its entry at the top. Write facts only, and link to documents instead of restating them.
 
+## 2026-11-07 (Phase 9 check; Phase 10 Demo: T-10.1, code-complete)
+- Owner: "check phase 9 and then 10". **Phase 9 still code-complete, not DONE:** PostgreSQL service `postgresql-x64-18` is stopped and `net start` needs admin (access denied), so `npm test`, e2e and `server/smoke-reports.mts` remain unrun.
+- Phase 10 built: see the DEMO-TOOLS-FRD built note. Server: `demoToolsAllowed` (config), `/dev/clock` 404 before the role check, `.strict()` body. Client: `ServerClockBar` (clock only; CoS controls; offset bar for all).
+- Verified: `npm run typecheck` 0; `config.test.ts` 5/5; server-mode production build scanned clean of demo strings and the demo password. **Not run:** `npm test` (new TC-DEMO-01-01/02 in `api.test.ts`), e2e, browser check (needs Postgres).
+- Owner: start Postgres (admin), then `! npm test`, `! npm run e2e`, the reports smoke, and a server-mode browser check with `DEMO_TOOLS=true` as CoS and a non-CoS. Next: Phase 11 Release.
+
+## 2026-11-07 (Phase 9 Reports: T-9.1…T-9.4, code-complete)
+- Owner: "phase 9 start". D-123 decided (FR-11 also 403 for staff). Built: see the REPORTS-FRD built note and API_CONTRACTS §2.1.
+- **Report rules only in `shared/reports.ts`.** Shared `ROLE_LABEL` moved to `shared/permissions.ts` (client constants re-export it). `dashboardTasks` takes `orgWide` for the org report scope. Route `server` may list permissions (any-of).
+- Verified: typecheck server + client 0; `reports.test.ts` + `insights.test.ts` 24/24. **Not run:** `npm test` (drops `taskwatch_test`, owner's call), e2e, and the dev smoke: PostgreSQL service `postgresql-x64-18` was stopped. Smoke script `server/smoke-reports.mts` (read-only; delete after use).
+- Owner: start Postgres, then `! npm test` and `! npm run e2e`. Next: Phase 10 Demo.
+
+## 2026-11-07 (Phase 8 DONE)
+- Owner: `npm test` and `npm run e2e` all green. Phase 8 (DASH-01…03, TASK-09, TASK-10, SRCH-01, PERF-07) and PERF-01…06 are DONE.
+- Next: Phase 9 Reports (T-9.1…T-9.4). FR-11 is already at `GET /api/reports/accountability`; the exports still sit at `/api/dashboard/export.*` and move in T-9.3. Reports are the last pages on the mock.
+
+## 2026-11-07 (Phase 8 status)
+- Owner asked whether Phase 8 is completed; it is **code-complete only**. A mistaken DONE was recorded and reverted the same day. Pending: `npm test` (new Dashboards tests, PERF) and a re-run of `npm run e2e` (the pasted failure predates the spec fix).
+- Next: Phase 9 Reports (T-9.1…T-9.4). Entry: Dashboards and Notifications exits; D-49, D-50, D-53 decided. FR-11 is already at `GET /api/reports/accountability`; exports still at `/api/dashboard/export.*` (move in T-9.3).
+
+## 2026-11-06 (Phase 8 Batch B: T-8.5, client)
+- Owner: "next". **Phase 8 code-complete.** See the Batch B built notes in DASHBOARD-FRD, SEARCH-FRD, TASKS-FRD (TASK-10) and PERFORMANCE-FRD.
+- Pages render payloads only: `getDashboard`, `getTeamOverview`, `search` in `services/api/misc.ts` return one shape in both modes (the mock calls `shared/insights.ts`). Client `features/dashboard/insights.ts` is now a re-export.
+- `http()` already prefixes `/api`: pass `/dashboard`, not `/api/dashboard` (caught in the browser check).
+- Fixed on the way: in server mode the sidebar hid Team Tasks / Team Overview / Escalations / Extensions from leads and managers (the "supervises" gate read the mock store). `/api/me` now returns `user.reportCount`; `Shell.tsx` uses `supervisesOnServer`. Manager no longer sees the L3 banner (Founder's Office only, AC-6; test assertion added). Task list crashed with no `?view=` (fixed before it shipped).
+- Verified: typecheck server + client 0; client build ok; `insights.test.ts` 16/16; browser (server mode) CoS, manager, lead, staff dashboards, lead team overview, team task list with stripe/tiles/views, search (one request per pause); mock mode CoS dashboard + team overview. No data changed except dev-login sign-in audit rows.
+- Owner: run `! npm test` and `! npm run e2e`. Next: Phase 9 Reports.
+
+## 2026-11-06 (Phase 8 Batch A: T-8.1–T-8.4, server)
+- Owner: "keep recommended and move to phase 8". D-122 decided (counts against, as built).
+- Built: see DASHBOARD-FRD, SEARCH-FRD, TASKS-FRD TASK-10 and PERFORMANCE-FRD built notes; contracts in API_CONTRACTS §2.1.
+- **Dashboard rules only in `shared/insights.ts`.** The mock must call the same `buildDashboard` in Batch B (map its TaskView to `DashTask`), so both modes return one shape.
+- `GET /api/dashboard` is now the role dashboard; FR-11 moved to `GET /api/reports/accountability` (exports unchanged until T-9.3). Existing tests updated to the new path, assertions unchanged.
+- Verified: typecheck (server, client) 0; `insights.test.ts` 16/16 + performance 22/22; read-only smoke on the dev DB as staff/lead/manager/CoS/CEO, all 200 (45–112 ms), summary tiles add up. The smoke caught and fixed a lost `$` in a SQL placeholder.
+- Owner: run `! npm test` (new Dashboards tests; also still pending for PERF) and `! npm run e2e`. Next: Batch B (T-8.5): dashboard page, team page, list stripe + tiles + FR-10 views, search palette with debounce, PERF-07 tiles; remove `getDb()` from those pages.
+
+## 2026-11-06 (PERF Batch B: plan Tasks 6–8, client + docs)
+- Done: see CHANGELOG and the PERFORMANCE-FRD built note. Final whole-change review next (fresh reviewer), then the owner's `npm test` + `npm run e2e`.
+- Dev has one test task from the browser check (#53).
+- Next: Phase 8 Dashboards (include PERF-07 employee tiles).
+
+## 2026-11-06 (PERF Batch A: plan Tasks 1–5, server)
+- Built: see CHANGELOG. Ledger of rulings: in the plan's execution notes (ask the agent); key ones: estimate+purpose required at the API (form fields added early), shortfall reason required for scored tasks finishing short or late, `rated` log kind, breakdown access = self / org reports / team reports for people below.
+- **Formulas only in `shared/performance.ts`.** Tasks created before 014 have `scored = false` and never count.
+- Owner: run `! npm test` and `! npm run e2e`. Next: Batch B (Tasks 6–8: review/rate UI, leaderboard/breakdown/workload pages, docs) and a final whole-change review.
+
+## 2026-11-06 (D-98 built; performance plan)
+- D-98 built (non-CoS resets only self and people below; self-reset allowed). Decisions D-33/D-107/D-108/D-109/D-120/D-121 recorded; open: WO-D2…D7 only.
+- Plan for PERFORMANCE-FRD: [PERFORMANCE_PLAN](../06-planning-and-tracking/PERFORMANCE_PLAN.md), 8 tasks, migration 014. Waiting for the owner's review and execution choice; build it before Phase 8.
+
+## 2026-11-06 (decisions-vs-code audit and fixes)
+- PERFORMANCE-FRD approved (Rate step yes); D-110…D-119 recorded. Not built yet: next is its implementation plan (before Phase 8).
+- Audit found KI-38…KI-46; all fixed (see CHANGELOG). Demo tools are now **off unless `DEMO_TOOLS=true`** (the owner's `.env` has it on).
+- Still open: D-98 (reset-access limited to own reporting line?), D-107/D-108/D-109 confirmations, D-120, D-121, D-33 (CEO fixed read-only or by default), WO-D2…D7.
+- Owner: run `! npm test` and `! npm run e2e` (covers Phase 7, the fixes and the new assertions).
+
+## 2026-11-06 (scope brief: gap analysis)
+- Owner pasted a new brief (outcomes, estimated vs actual time, performance scores, leaderboards) and asked for the difference with the current system. Done: [PERFORMANCE_SCOPE_GAP_ANALYSIS](../01-discovery/PERFORMANCE_SCOPE_GAP_ANALYSIS.md). No code changed.
+- **The WO excludes "time tracking by the hour, payroll or HR appraisal workflows" (p.1).** Do not build time capture, scoring or leaderboards until D-110 is answered.
+- If any measurement fields (M-1/M-2) are approved, settle their data model before Phase 8, so dashboards and reports are built once.
+
 ## 2026-11-06 (Phase 7 Batch B: T-7.4, client)
 - Owner said "go for it". Done: see RECURRING-FRD Batch B note. **Phase 7 code-complete.** Browser-checked; one schedule was paused and resumed (audit rows `recurrence.paused/resumed` on `recurrence:1`), nothing created.
 - A dev server restart drops browser sessions: sign in again before reading a 401 as a bug.

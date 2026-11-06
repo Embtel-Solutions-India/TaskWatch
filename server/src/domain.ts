@@ -80,6 +80,9 @@ export function stageOf(level: number): Stage {
   return 'on_track';
 }
 
+/** TASK-10: a task's stage stripe; the rule is shared with the client. */
+export { taskStage } from '@taskwatch/shared/insights';
+
 export function formatHours(hours: number): string {
   const h = Math.max(0, Math.floor(hours));
   if (h < 24) return `${h} h`;

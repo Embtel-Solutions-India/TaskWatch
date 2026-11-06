@@ -12,6 +12,8 @@ import {
   type TaskParties,
 } from '@taskwatch/shared/permissions';
 import { allowedActions, type Status, type TaskAction } from '@taskwatch/shared/workflow';
+import { isRatable } from '@taskwatch/shared/performance';
+import * as clock from '../clock.js';
 import { isOpenStatus } from '../domain.js';
 import type { Directory, DirUser } from './directory.js';
 import { hasRole } from './directory.js';
@@ -95,14 +97,14 @@ export function canAssign(viewer: DirUser, dir: Directory): boolean {
 export function taskActions(
   viewer: DirUser,
   dir: Directory,
-  task: TaskRef & { acknowledged_at?: Date | null; review_required?: boolean },
+  task: TaskRef & { acknowledged_at?: Date | null; review_required?: boolean; [k: string]: any },
   facts: { pendingExtension: boolean; mayAckEscalation: boolean },
 ): TaskAction[] {
   const p = parties(task);
   const isAssignee = task.assignee_id === viewer.id;
   return [
     ...allowedActions(
-      { status: task.status as Status, acknowledgedAt: task.acknowledged_at ?? null, reviewRequired: !!task.review_required },
+      { status: task.status as Status, acknowledgedAt: task.acknowledged_at ?? null, reviewRequired: !!task.review_required, ratable: ratableRow(task, clock.now()) },
       {
         canView: canView(viewer, task, dir),
         isAssignee,
@@ -114,6 +116,14 @@ export function taskActions(
     ),
   ];
 }
+
+/** PERF: the shared isRatable on a task row (snake_case columns). */
+export const ratableRow = (r: Record<string, any>, now: Date): boolean =>
+  r.due_at instanceof Date &&
+  isRatable(
+    { status: r.status, reviewRequired: !!r.review_required, scored: !!r.scored, target: r.target ?? null, outcomeScore: r.outcome_score ?? null, shortfallReason: r.shortfall_reason ?? null, shortfallAccepted: r.shortfall_accepted ?? null, blockedReason: r.blocked_reason ?? null, dueAt: r.due_at },
+    now,
+  );
 
 /** Authority over the task (giver, reviewer, or above the assignee with view_tasks), inside the viewer's organization. */
 export const isOverseerOf = (viewer: DirUser, task: TaskRef, dir: Directory): boolean => sameOrg(viewer, task) && isOverseer(dir.org, viewer, parties(task));
@@ -134,7 +144,7 @@ export function taskPermissions(viewer: DirUser, task: TaskRef, dir: Directory):
   const extendRole = rel === 'cos' || rel === 'manager' || (rel === 'lead' && !task.lead_extension_used);
   return {
     postUpdate: open && isAssignee && can(viewer, dir, 'update_assigned_tasks'),
-    comment: !isAssignee && canView(viewer, task, dir),
+    comment: canView(viewer, task, dir), // D-74: the assignee may comment too (KI-45)
     extendDue: open && extendRole && can(viewer, dir, 'approve_extensions'),
     reassign: open && rel !== null && can(viewer, dir, 'reassign_tasks'), // D-29: leads lack it by default
     close: open && (rel === 'cos' || rel === 'manager'),

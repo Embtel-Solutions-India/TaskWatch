@@ -1,10 +1,101 @@
+import { ROLE_LABEL, ROLES } from '@taskwatch/shared/permissions';
+import { buildReport, type ReportFilters } from '@taskwatch/shared/reports';
 import * as clock from '../clock.js';
 import { HOUR } from '../clock.js';
 import { pool } from '../db/pool.js';
 import { openSql } from '../domain.js';
-import { scopeIds, visibilityFilter } from './access.js';
+import { forbidden, invalid } from '../http/errors.js';
+import { can, scopeIds, visibilityFilter } from './access.js';
 import type { Directory, DirUser } from './directory.js';
-import { isFounderOffice } from './directory.js';
+import { dashboardTasks } from './queries.js';
+
+export type ReportScope = 'org' | 'team';
+
+/** RPT-01: org with view_org_reports, else team with view_team_reports, else 403 (every /api/reports* endpoint). */
+export function reportScope(viewer: DirUser, dir: Directory): ReportScope {
+  if (can(viewer, dir, 'view_org_reports')) return 'org';
+  if (can(viewer, dir, 'view_team_reports')) return 'team';
+  throw forbidden('You do not have access to reports.');
+}
+
+const teamsOf = (organizationId: number) =>
+  pool.query<{ id: number; name: string; entity_id: string }>('select id, name, entity_id from teams where organization_id = $1 and archived_at is null order by name', [organizationId]);
+
+/** RPT-04: filter options inside the report scope. Names and ids only (SEC-9). */
+export async function reportOptions(viewer: DirUser, dir: Directory) {
+  const scope = reportScope(viewer, dir);
+  const line = dir.descendants(viewer.id);
+  const people = dir.all().filter((u) => u.active && (scope === 'org' || line.has(u.id)));
+  const { rows } = await teamsOf(viewer.organizationId);
+  const teamIds = new Set(people.map((u) => u.teamId));
+  const givers = scope === 'org' ? people : [viewer, ...people];
+  const brief = (u: DirUser) => ({ id: u.id, name: u.name });
+  return {
+    scope,
+    teams: rows.filter((t) => scope === 'org' || teamIds.has(t.id)).map((t) => ({ id: t.id, name: t.name, entityId: t.entity_id })),
+    people: people.map(brief),
+    givers: givers.filter((u) => u.roles.some((r) => r !== 'staff')).map(brief),
+  };
+}
+
+/** RPT-02: the nine-report payload over the RPT-01 scope (D-51: team scope = what the viewer may see). */
+export async function report(viewer: DirUser, dir: Directory, f: ReportFilters) {
+  const scope = reportScope(viewer, dir);
+  const { rows: teams } = await teamsOf(viewer.organizationId);
+  if (f.teamId && !teams.some((t) => String(t.id) === f.teamId)) throw invalid({ teamId: 'Choose a team from the list.' });
+  if (f.userId && !dir.get(Number(f.userId))) throw invalid({ userId: 'Choose a person from the list.' });
+  if (f.giverId && !dir.get(Number(f.giverId))) throw invalid({ giverId: 'Choose a person from the list.' });
+
+  const { tasks } = await dashboardTasks(viewer, dir, undefined, scope === 'org');
+  const ids = tasks.map((t) => t.id as number);
+  const [events, reviews, exts, reassigned] = await Promise.all([
+    pool.query('select task_id, level, fired_at, cleared_at from escalations where task_id = any($1)', [ids]),
+    pool.query(
+      `select r.task_id, r.round, u.name as reviewer, r.decision, r.submitted_at, r.decided_at
+         from reviews r left join users u on u.id = r.reviewer_id where r.task_id = any($1) and r.decided_at is not null order by r.submitted_at`,
+      [ids],
+    ),
+    pool.query(
+      `select x.id, x.task_id, t.title, q.name as requester, d.name as decider, x.current_due, x.requested_due, x.requested_at, x.reason, x.status
+         from extensions x join tasks t on t.id = x.task_id join users q on q.id = x.requested_by left join users d on d.id = x.decided_by
+        where x.task_id = any($1) order by x.requested_at`,
+      [ids],
+    ),
+    pool.query(`select task_id from activity_log where kind = 'reassign' and task_id = any($1)`, [ids]),
+  ]);
+  const teamName = new Map(teams.map((t) => [t.id, t.name]));
+  const peopleIds = new Set(tasks.flatMap((t) => [t.assigneeId as number, t.assignedBy as number]));
+  const people = [...peopleIds].flatMap((id) => {
+    const u = dir.get(id);
+    return u ? [{ id, name: u.name, team: (u.teamId && teamName.get(u.teamId)) || '—', role: ROLE_LABEL[ROLES.find((r) => u.roles.includes(r))!] }] : [];
+  });
+  return buildReport(
+    {
+      now: clock.now().getTime(),
+      zone: viewer.timeZone,
+      scope,
+      tasks,
+      events: events.rows.map((e) => ({ taskId: e.task_id, level: e.level, at: e.fired_at.getTime(), resolved: e.cleared_at !== null })),
+      reviews: reviews.rows.map((r) => ({ taskId: r.task_id, round: r.round, reviewer: r.reviewer ?? '—', decision: r.decision, submittedAt: r.submitted_at.getTime(), decidedAt: r.decided_at.getTime() })),
+      extensions: exts.rows.map((x) => ({
+        id: x.id,
+        taskId: x.task_id,
+        taskTitle: x.title,
+        requester: x.requester,
+        decider: x.decider,
+        currentDue: x.current_due.getTime(),
+        requestedDue: x.requested_due.getTime(),
+        at: x.requested_at.getTime(),
+        reason: x.reason,
+        status: x.status,
+      })),
+      reassignments: reassigned.rows.map((r) => r.task_id),
+      teams: teams.map((t) => ({ id: t.id, name: t.name })),
+      people,
+    },
+    f,
+  );
+}
 
 export interface EntityRow {
   entityId: string;
@@ -42,9 +133,10 @@ export interface Accountability {
 
 /** FR-11: accountability by entity and by person, limited to what the viewer may see. */
 export async function accountability(viewer: DirUser, dir: Directory, days: number): Promise<Accountability> {
+  const orgWide = reportScope(viewer, dir) === 'org';
   const now = clock.now();
   const from = new Date(now.getTime() - days * 24 * HOUR);
-  const vis = visibilityFilter(viewer, dir, 't', 1);
+  const vis = orgWide ? { sql: 't.organization_id = $1', params: [viewer.organizationId] } : visibilityFilter(viewer, dir, 't', 1);
 
   const ent = await pool.query(
     `select en.id, en.name,
@@ -84,9 +176,9 @@ export async function accountability(viewer: DirUser, dir: Directory, days: numb
         longestSilenceTask: s ? { id: s.id, title: s.title, assignee: s.assignee } : null,
       };
     })
-    .filter((r) => isFounderOffice(viewer) || r.open > 0);
+    .filter((r) => orgWide || r.open > 0);
 
-  const people = isFounderOffice(viewer) ? dir.all().map((u) => u.id) : scopeIds(viewer, dir);
+  const people = orgWide ? dir.all().map((u) => u.id) : scopeIds(viewer, dir);
   const per = await pool.query(
     `select u.id, u.name, u.entity_id, u.title,
        (select count(*) from tasks t where t.assignee_id = u.id and ${openSql('t')}) as open,
@@ -114,6 +206,6 @@ export async function accountability(viewer: DirUser, dir: Directory, days: numb
       onTimePct: r.closed > 0 ? Math.round((r.on_time / r.closed) * 100) : null,
     }));
 
-  const scope = isFounderOffice(viewer) ? 'All entities' : `${viewer.name} and their team`;
+  const scope = orgWide ? 'All entities' : `${viewer.name} and their team`;
   return { generatedAt: now, from, days, scope, byEntity, byPerson };
 }

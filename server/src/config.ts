@@ -20,6 +20,11 @@ const googleEnabled = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
  * Directory sign-in is a development fallback (SEC-10). Opt-in only: a deployment that forgets NODE_ENV must not
  * fall open to "sign in as anyone". Never in production, even when asked for.
  */
+/** DEMO-01 G-1/G-4 (D-47): the dev clock is off unless DEMO_TOOLS=true, and never in production. */
+export function demoToolsAllowed(e: NodeJS.ProcessEnv): boolean {
+  return e.NODE_ENV !== 'production' && e.DEMO_TOOLS === 'true';
+}
+
 export function devLoginAllowed(e: NodeJS.ProcessEnv): boolean {
   return e.NODE_ENV !== 'production' && e.ALLOW_DEV_LOGIN === 'true';
 }
@@ -75,7 +80,7 @@ export const config = {
 
   devLogin: devLoginAllowed(env),
   // Simulated-clock controls for demonstrating the ladder; never available in production.
-  demoTools: !isProd && env.DEMO_TOOLS !== 'false',
+  demoTools: demoToolsAllowed(env),
 
   uploadDir: path.resolve(serverRoot, env.UPLOAD_DIR ?? 'uploads'),
   maxUploadBytes: 15 * 1024 * 1024,

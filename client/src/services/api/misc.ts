@@ -1,13 +1,17 @@
-import { DAY, HOUR, ROLE_LABEL } from '../../constants';
-import type { Notification, NotificationPrefs, Priority, Status, Task, User } from '../../types';
-import { ACTIVE_STATUSES } from '../../types';
+import { HOUR, ROLE_LABEL } from '../../constants';
+import type { Db, Notification, NotificationPrefs, Status, Task, User } from '../../types';
 import { ApiError, canViewUser, hasPerm, reportsOf } from '../authz/permissions';
-import { audit, ms } from '../core';
+import { buildReport, reportCsv, type Report, type ReportFilters, type ReportId } from '@taskwatch/shared/reports';
+import { downloadCsv } from '../../utils/format';
+import { buildDashboard, buildTeamOverview, layoutFor, type DashActivity, type DashboardExtras, type DashboardPayload, type DashTask, type Range, type TeamOverview } from '@taskwatch/shared/insights';
+import { departmentOf } from '../../features/dashboard/insights';
+import { audit, foundersOffice, ms } from '../core';
+import { allowedActions } from '../engine/workflow';
 import { defaultPrefs } from '../mock/seed';
 import { getDb, getSession, now, setSession } from '../mock/store';
 import { me, mutate, read, toView, visibleTasks, type TaskView } from './base';
 import { notificationsServer } from './notificationsServer';
-import { BACKEND } from '../http';
+import { BACKEND, http } from '../http';
 
 /* ---------------- Auth (simulated) ---------------- */
 
@@ -109,250 +113,299 @@ export function setPrefs(prefs: NotificationPrefs): void | Promise<void> {
   });
 }
 
-/* ---------------- Search (permission-aware) ---------------- */
+/* ---------------- Search (SRCH-01, permission-aware) ---------------- */
 
-export function search(q: string) {
+export interface SearchResult {
+  tasks: { id: string | number; title: string; status: Status; level: number; assignee: { id: string | number; name: string }; giver: { id: string | number; name: string }; team: { id: string | number; name: string } | null }[];
+  people: { id: string | number; name: string; title: string | null; roles: string[]; active: boolean }[];
+  teams: { id: string | number; name: string }[];
+}
+
+export async function search(q: string): Promise<SearchResult> {
+  if (BACKEND === 'server') return http<SearchResult>('GET', `/search?q=${encodeURIComponent(q.trim())}`);
   return read((db, user) => {
     const s = q.trim().toLowerCase();
     if (!s) return { tasks: [], people: [], teams: [] };
+    const named = (u: User | undefined) => ({ id: u?.id ?? '', name: u?.name ?? '' });
     const tasks = visibleTasks(db, user)
       .map((t) => toView(db, t))
       .filter((t) => t.id.toLowerCase().includes(s) || t.title.toLowerCase().includes(s) || t.assignee?.name.toLowerCase().includes(s) || t.giver?.name.toLowerCase().includes(s) || t.team?.name.toLowerCase().includes(s))
-      .slice(0, 8);
-    const people = db.users.filter((u) => canViewUser(db, user, u) && (u.name.toLowerCase().includes(s) || u.email.includes(s) || u.title.toLowerCase().includes(s))).slice(0, 6);
-    const visibleTeamIds = new Set(db.users.filter((u) => canViewUser(db, user, u)).map((u) => u.teamId));
-    const teams = db.teams.filter((t) => visibleTeamIds.has(t.id) && t.name.toLowerCase().includes(s));
+      .slice(0, 8)
+      .map((t) => ({ id: t.id, title: t.title, status: t.status, level: t.level, assignee: named(t.assignee), giver: named(t.giver), team: t.team ? { id: t.team.id, name: t.team.name } : null }));
+    const visible = db.users.filter((u) => canViewUser(db, user, u));
+    const people = visible
+      .filter((u) => u.name.toLowerCase().includes(s) || u.email.includes(s) || u.title.toLowerCase().includes(s))
+      .slice(0, 6)
+      .map((u) => ({ id: u.id, name: u.name, title: u.title, roles: [u.role], active: u.status === 'active' }));
+    // Teams only for those who can open the team task list (route gate `supervises`).
+    const supervises = hasPerm(db, user, 'view_tasks') && (user.role === 'cos' || reportsOf(db, user.id).size > 0);
+    const teamIds = new Set(visible.map((u) => u.teamId));
+    const teams = supervises ? db.teams.filter((t) => teamIds.has(t.id) && t.name.toLowerCase().includes(s)).map((t) => ({ id: t.id, name: t.name })) : [];
     return { tasks, people, teams };
   });
 }
 
+
 /* ---------------- Reports & dashboards ---------------- */
 
-export interface ReportFilters {
-  from: string;
-  to: string;
-  teamId: string;
-  userId: string;
-  giverId: string;
-  priority: Priority | '';
-  status: Status | '';
-  level: string;
+export type { Report, ReportFilters };
+
+/** RPT-01: org with view_org_reports, else team with view_team_reports, else 403. */
+function mockScope(db: Db, user: User): 'org' | 'team' {
+  if (hasPerm(db, user, 'view_org_reports')) return 'org';
+  if (hasPerm(db, user, 'view_team_reports')) return 'team';
+  throw new ApiError(403, 'You do not have access to reports.');
 }
 
-export function reportScope(): 'org' | 'team' {
+export async function reportScope(): Promise<'org' | 'team'> {
+  if (BACKEND === 'server') return (await http<{ scope: 'org' | 'team' }>('GET', '/reports/scope')).scope;
+  return read(mockScope);
+}
+
+export interface ReportOptions {
+  scope: 'org' | 'team';
+  teams: { id: string | number; name: string }[];
+  people: { id: string | number; name: string }[];
+  givers: { id: string | number; name: string }[];
+}
+
+/** RPT-04: filter options inside the report scope. */
+export async function getReportOptions(): Promise<ReportOptions> {
+  if (BACKEND === 'server') return http<ReportOptions>('GET', '/reports/options');
   return read((db, user) => {
-    if (hasPerm(db, user, 'view_org_reports')) return 'org';
-    if (hasPerm(db, user, 'view_team_reports')) return 'team';
-    throw new ApiError(403, 'You do not have access to reports.');
+    const scope = mockScope(db, user);
+    const line = reportsOf(db, user.id);
+    const people = db.users.filter((u) => u.status === 'active' && (scope === 'org' || line.has(u.id)));
+    const teamIds = new Set(people.map((u) => u.teamId));
+    const brief = (u: User) => ({ id: u.id, name: u.name });
+    return {
+      scope,
+      teams: db.teams.filter((t) => scope === 'org' || teamIds.has(t.id)).map((t) => ({ id: t.id, name: t.name })),
+      people: people.map(brief),
+      givers: (scope === 'org' ? people : [user, ...people]).filter((u) => u.role !== 'staff').map(brief),
+    };
   });
 }
 
-/** Tasks in report scope: whole org, or the user's reporting line. */
-function scopedTasks(user: User): Task[] {
-  const db = getDb();
-  if (hasPerm(db, user, 'view_org_reports')) return db.tasks;
-  if (!hasPerm(db, user, 'view_team_reports')) throw new ApiError(403, 'You do not have access to reports.');
-  const ids = reportsOf(db, user.id);
-  return db.tasks.filter((t) => ids.has(t.assigneeId));
+const reportQuery = (f: ReportFilters) => new URLSearchParams(Object.entries(f).filter(([, v]) => v !== '')).toString();
+
+/** RPT-02: one payload for the nine reports; the mock runs the same shared rules over its scoped records. */
+export async function getReport(f: ReportFilters): Promise<Report> {
+  if (BACKEND === 'server') return http<Report>('GET', `/reports?${reportQuery(f)}`);
+  return read((db, user) => {
+    const scope = mockScope(db, user);
+    const tasks = (scope === 'org' ? db.tasks : visibleTasks(db, user)).filter((t) => t.status !== 'draft'); // D-51
+    const name = (id: string | null) => (id ? (nameOf(db)(id) ?? '—') : '—');
+    return buildReport(
+      {
+        now: now(),
+        zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        scope,
+        tasks: tasks.map((t) => dashTask(db, user, t)),
+        events: db.escalations.map((e) => ({ taskId: e.taskId, level: e.level, at: ms(e.at), resolved: e.status === 'resolved' })),
+        reviews: db.reviews.filter((r) => r.decidedAt).map((r) => ({ taskId: r.taskId, round: r.round, reviewer: name(r.reviewerId), decision: r.decision!, submittedAt: ms(r.submittedAt), decidedAt: ms(r.decidedAt!) })),
+        extensions: db.extensions.map((e) => ({
+          id: e.id,
+          taskId: e.taskId,
+          taskTitle: db.tasks.find((t) => t.id === e.taskId)?.title ?? '',
+          requester: name(e.requestedBy),
+          decider: e.decidedBy ? name(e.decidedBy) : null,
+          currentDue: ms(e.currentDue),
+          requestedDue: ms(e.requestedDue),
+          at: ms(e.at),
+          reason: e.reason,
+          status: e.status,
+        })),
+        reassignments: db.assignments.filter((a) => a.fromId).map((a) => a.taskId),
+        teams: db.teams,
+        people: db.users.map((u) => ({ id: u.id, name: u.name, team: db.teams.find((t) => t.id === u.teamId)?.name ?? '—', role: ROLE_LABEL[u.role] })),
+      },
+      f,
+    );
+  });
 }
 
-export function getReport(f: ReportFilters) {
-  return read((db, user) => {
-    const all = scopedTasks(user).filter((t) => t.status !== 'draft');
-    const fromMs = f.from ? ms(f.from + 'T00:00:00') : 0;
-    const toMs = f.to ? ms(f.to + 'T23:59:59') : Infinity;
-    const match = (t: TaskView) =>
-      (!f.teamId || t.teamId === f.teamId) &&
-      (!f.userId || t.assigneeId === f.userId) &&
-      (!f.giverId || t.assignedBy === f.giverId) &&
-      (!f.priority || t.priority === f.priority) &&
-      (!f.status || t.status === f.status) &&
-      (!f.level || (f.level === 'none' ? t.level < 0 : t.level === Number(f.level)));
-    const views = all.map((t) => toView(db, t)).filter(match);
-    // Historical: tasks created in the date range. Current workload: open tasks now, ignoring dates.
-    const hist = views.filter((t) => ms(t.createdAt) >= fromMs && ms(t.createdAt) <= toMs);
-    const open = views.filter((t) => ACTIVE_STATUSES.includes(t.status) || t.status === 'submitted');
-    const completed = hist.filter((t) => t.status === 'completed');
-    const onTime = completed.filter((t) => t.completedAt && t.completedAt <= t.dueAt);
-    const ids = new Set(views.map((t) => t.id));
-    const events = db.escalations.filter((e) => ids.has(e.taskId) && ms(e.at) >= fromMs && ms(e.at) <= toMs);
-    const reviews = db.reviews.filter((r) => ids.has(r.taskId) && r.decidedAt && ms(r.submittedAt) >= fromMs && ms(r.submittedAt) <= toMs);
-    const exts = db.extensions.filter((e) => ids.has(e.taskId) && ms(e.at) >= fromMs && ms(e.at) <= toMs);
-    const running = open.filter((t) => ACTIVE_STATUSES.includes(t.status));
-    const compliant = running.filter((t) => (t.levelInfo?.silenceLevel ?? -1) < 0);
-    const name = (id: string) => db.users.find((u) => u.id === id)?.name ?? '—';
+/** RPT-03: the server builds the file from the same filters (scope enforced there); the mock writes the same columns. */
+export function exportReport(id: ReportId, f: ReportFilters, r: Report): void {
+  if (BACKEND === 'server') return window.location.assign(`/api/reports/${id}/export.csv?${reportQuery(f)}`);
+  downloadCsv(`taskwatch-report-${id}-${new Date().toISOString().slice(0, 10)}.csv`, reportCsv(id, r, Intl.DateTimeFormat().resolvedOptions().timeZone));
+}
 
-    // Weekly buckets across the range (or the last 8 weeks).
-    const endMs = Math.min(toMs, now());
-    const startMs = fromMs || endMs - 8 * 7 * DAY;
-    const weeks: { label: string; created: number; completed: number }[] = [];
-    for (let w = startMs; w <= endMs; w += 7 * DAY) {
-      const e = w + 7 * DAY;
-      weeks.push({
-        label: new Date(w).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        created: views.filter((t) => ms(t.createdAt) >= w && ms(t.createdAt) < e).length,
-        completed: views.filter((t) => t.completedAt && ms(t.completedAt) >= w && ms(t.completedAt) < e).length,
-      });
+/** RPT-05/06 FR-11 accountability (server only: the prototype has no first-response data). */
+export interface Accountability {
+  generatedAt: string;
+  from: string;
+  days: number;
+  scope: string;
+  byEntity: { entityId: string; entityName: string; open: number; onTrack: number; amber: number; red: number; blocked: number; longestSilenceHours: number | null; longestSilenceTask: { id: number; title: string; assignee: string } | null }[];
+  byPerson: { userId: number; name: string; entityId: string; title: string | null; open: number; avgFirstResponseHours: number | null; escalations: number; closed: number; onTime: number; onTimePct: number | null }[];
+}
+
+export const getAccountability = (days: Range) => http<Accountability>('GET', `/reports/accountability?days=${days}`);
+/** RPT-07 */
+export const exportAccountability = (days: Range, kind: 'csv' | 'pdf') => window.location.assign(`/api/reports/accountability/export.${kind}?days=${days}`);
+
+/* ---------------- Dashboards (DASH-01…03, PERF-07) and team overview (DASH-02) ---------------- */
+// Both backends return one shape: the server computes it; the mock calls the same shared rules (shared/insights.ts)
+// over the records the viewer may see. Pages render the payload only and never read the store.
+
+/** The mock's DashTask for a task (the server builds the same from its rows). */
+function dashTask(db: Db, user: User, t: Task): DashTask {
+  const v = toView(db, t);
+  return {
+    id: v.id,
+    title: v.title,
+    status: v.status,
+    priority: v.priority,
+    assigneeId: v.assigneeId,
+    assigneeName: v.assignee?.name ?? '',
+    assignedBy: v.assignedBy,
+    teamId: v.teamId,
+    entityId: departmentOf(db, v.teamId),
+    createdAt: ms(v.createdAt),
+    updatedAt: ms(v.updatedAt),
+    dueAt: ms(v.dueAt),
+    completedAt: v.completedAt ? ms(v.completedAt) : null,
+    clockStartedAt: ms(v.clockStartedAt),
+    acknowledgedAt: v.acknowledgedAt ? ms(v.acknowledgedAt) : null,
+    level: v.level,
+    silenceLevel: v.levelInfo?.silenceLevel ?? -1,
+    next: v.levelInfo?.next ?? null,
+    overdue: v.overdue,
+    mayReview: allowedActions(db, user, t).has('review'),
+  };
+}
+
+const isOrgWide = (u: User) => u.role === 'cos' || u.role === 'ceo';
+const nameOf = (db: Db) => (id: string | number) => db.users.find((u) => u.id === id)?.name ?? null;
+const brief = (db: Db, id: string | null) => (id ? { id, name: nameOf(db)(id) ?? '' } : null);
+const activityRows = (db: Db, taskIds: Set<string>, limit: number): DashActivity[] =>
+  db.activities
+    .filter((a) => taskIds.has(a.taskId))
+    .sort((a, b) => b.at.localeCompare(a.at))
+    .slice(0, limit)
+    .map((a) => ({ id: a.id, taskId: a.taskId, kind: a.type, body: a.text, at: a.at, actor: brief(db, a.actorId) }));
+
+export async function getDashboard(range: Range, entity: string): Promise<DashboardPayload> {
+  if (BACKEND === 'server') return http<DashboardPayload>('GET', `/dashboard?range=${range}${entity ? `&entity=${encodeURIComponent(entity)}` : ''}`);
+  return read((db, user) => {
+    const orgWide = isOrgWide(user);
+    if (entity && !orgWide) throw new ApiError(403, "You don't have permission to filter by entity.");
+    const n = now();
+    const layout = layoutFor([user.role]);
+    const inEntity = (id: string | null) => !entity || id === entity;
+    const scope = visibleTasks(db, user)
+      .filter((t) => t.status !== 'draft' && inEntity(departmentOf(db, t.teamId)))
+      .map((t) => dashTask(db, user, t));
+    const ids = new Set(scope.map((t) => t.id as string));
+    const reports = db.users.filter((u) => reportsOf(db, user.id).has(u.id));
+    const staff = orgWide ? db.users.filter((u) => inEntity(departmentOf(db, u.teamId)) || db.departments.some((d) => d.id === entity && d.headId === u.id)) : [];
+    const teams = db.teams.filter((t) => inEntity(t.departmentId));
+    const person = (u: User) => ({ id: u.id, name: u.name, title: u.title, active: u.status === 'active' });
+
+    const payload = buildDashboard({
+      layout,
+      now: n,
+      range,
+      zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      viewerId: user.id,
+      overloadThreshold: db.settings.overloadThreshold,
+      scope,
+      extensions: db.extensions
+        .filter((e) => e.status === 'pending' && ids.has(e.taskId))
+        .map((e) => ({ id: e.id, taskId: e.taskId, at: ms(e.at), mayDecide: e.requestedBy !== user.id && allowedActions(db, user, db.tasks.find((t) => t.id === e.taskId)!).has('decide_extension') })),
+      events: db.escalations.filter((e) => ids.has(e.taskId)).map((e) => ({ taskId: e.taskId, level: e.level, at: ms(e.at), ackAt: e.ackAt ? ms(e.ackAt) : null })),
+      progressAt: db.activities.filter((a) => a.type === 'progress' && ids.has(a.taskId)).map((a) => ms(a.at)),
+      people: (orgWide ? staff.filter((u) => u.id !== user.id) : reports).map(person),
+      teams: teams.map((t) => ({ id: t.id, name: t.name, entityId: t.departmentId })),
+      entities: db.departments.filter((d) => inEntity(d.id)).map((d) => ({ id: d.id, name: d.name })),
+    });
+
+    const extra: Partial<DashboardExtras> = {};
+    if (layout === 'staff') {
+      const mine = new Set(db.tasks.filter((t) => t.assigneeId === user.id).map((t) => t.id));
+      extra.feedback = db.reviews
+        .filter((r) => r.submittedBy === user.id && r.decidedAt)
+        .sort((a, b) => b.decidedAt!.localeCompare(a.decidedAt!))
+        .slice(0, 3)
+        .map((r) => ({ id: r.id, taskId: r.taskId, decision: r.decision!, comment: r.comment, at: r.decidedAt! }));
+      extra.comments = db.comments
+        .filter((c) => !c.deleted && c.authorId !== user.id && mine.has(c.taskId))
+        .sort((a, b) => b.at.localeCompare(a.at))
+        .slice(0, 3)
+        .map((c) => ({ id: c.id, taskId: c.taskId, body: c.body.slice(0, 200), at: c.at, author: brief(db, c.authorId)! }));
+      extra.activity = activityRows(db, mine, 6);
+    } else extra.activity = activityRows(db, ids, 8);
+
+    if (layout === 'executive') {
+      const active = staff.filter((u) => u.status === 'active');
+      extra.staff = { active: active.length, inactive: staff.length - active.length, noManager: staff.filter((u) => !u.managerId && u.role !== 'cos').length };
+      extra.staffByRole = Object.fromEntries((['ceo', 'cos', 'manager', 'lead', 'staff'] as const).map((r) => [r, active.filter((u) => u.role === r).length]));
+      extra.orgMini = db.departments
+        .filter((d) => inEntity(d.id))
+        .map((d) => ({
+          id: d.id,
+          name: d.name,
+          head: d.headId ? nameOf(db)(d.headId) : null,
+          teams: teams
+            .filter((t) => t.departmentId === d.id)
+            .map((t) => {
+              const lead = db.users.find((u) => u.id === t.leadId);
+              return { id: t.id, name: t.name, members: active.filter((u) => u.teamId === t.id && u.id !== user.id).length, lead: lead?.name ?? null, leadWithoutManager: !!lead && !lead.managerId };
+            }),
+        }));
+      extra.recentAdmin = hasPerm(db, user, 'view_audit_logs')
+        ? [...db.audit]
+            .filter((a) => a.source !== 'system')
+            .sort((a, b) => b.at.localeCompare(a.at))
+            .slice(0, 6)
+            .map((a) => ({ id: a.id, at: a.at, actor: brief(db, a.actorId), action: a.action, next: a.next }))
+        : [];
     }
 
-    const assignees = [...new Set(views.map((t) => t.assigneeId))];
-    const staffRows = assignees
-      .map((id) => {
-        const mine = hist.filter((t) => t.assigneeId === id);
-        const done = mine.filter((t) => t.status === 'completed');
-        const openNow = open.filter((t) => t.assigneeId === id);
-        const run = running.filter((t) => t.assigneeId === id);
-        const esc = events.filter((e) => e.level >= 1 && views.find((t) => t.id === e.taskId)?.assigneeId === id).length;
-        return {
-          id,
-          name: name(id),
-          team: db.teams.find((t) => t.id === db.users.find((u) => u.id === id)?.teamId)?.name ?? '—',
-          assigned: mine.length,
-          completed: done.length,
-          onTimeRate: done.length ? done.filter((t) => t.completedAt! <= t.dueAt).length / done.length : null,
-          openNow: openNow.length,
-          overdueNow: openNow.filter((t) => t.overdue).length,
-          compliance: run.length ? run.filter((t) => (t.levelInfo?.silenceLevel ?? -1) < 0).length / run.length : null,
-          escalations: esc,
-        };
-      })
-      .sort((a, b) => b.openNow - a.openNow);
-
-    const teamRows = db.teams
-      .map((tm) => {
-        const tv = hist.filter((t) => t.teamId === tm.id);
-        const done = tv.filter((t) => t.status === 'completed');
-        const openNow = open.filter((t) => t.teamId === tm.id);
-        return {
-          id: tm.id,
-          name: tm.name,
-          assigned: tv.length,
-          completed: done.length,
-          completionRate: tv.length ? done.length / tv.length : null,
-          onTimeRate: done.length ? done.filter((t) => t.completedAt! <= t.dueAt).length / done.length : null,
-          openNow: openNow.length,
-          overdueNow: openNow.filter((t) => t.overdue).length,
-          escalations: events.filter((e) => e.level >= 1 && views.find((t) => t.id === e.taskId)?.teamId === tm.id).length,
-        };
-      })
-      .filter((r) => r.assigned || r.openNow);
-
-    const givers = [...new Set(hist.map((t) => t.assignedBy))];
-    const giverRows = givers.map((id) => {
-      const g = hist.filter((t) => t.assignedBy === id);
-      return { id, name: name(id), role: ROLE_LABEL[db.users.find((u) => u.id === id)?.role ?? 'staff'], assigned: g.length, open: g.filter((t) => ACTIVE_STATUSES.includes(t.status) || t.status === 'submitted').length, completed: g.filter((t) => t.status === 'completed').length, overdue: g.filter((t) => t.overdue).length, reassigned: db.assignments.filter((a) => a.fromId && g.some((t) => t.id === a.taskId)).length };
-    });
-
-    const turnaround = reviews.map((r) => ({ taskId: r.taskId, round: r.round, reviewer: name(r.reviewerId ?? ''), decision: r.decision!, hours: (ms(r.decidedAt!) - ms(r.submittedAt)) / HOUR, submittedAt: r.submittedAt }));
-    const reviewers = [...new Set(turnaround.map((r) => r.reviewer))].map((n) => {
-      const rs = turnaround.filter((r) => r.reviewer === n);
-      return { reviewer: n, reviews: rs.length, avgHours: rs.reduce((s, r) => s + r.hours, 0) / rs.length, changesRate: rs.filter((r) => r.decision !== 'approved').length / rs.length };
-    });
-
+    // WO "L3 … top of dashboard": unresolved L3 events naming a Founder's Office member.
+    const l3 = foundersOffice(db).includes(user.id) ? db.escalations.filter((e) => e.level === 3 && e.status !== 'resolved' && e.recipientIds.includes(user.id)) : [];
+    const l3Tasks = [...new Set(l3.map((e) => e.taskId))];
     return {
-      scope: hasPerm(db, user, 'view_org_reports') ? ('org' as const) : ('team' as const),
-      summary: {
-        created: hist.length,
-        completed: completed.length,
-        completionRate: hist.length ? completed.length / hist.length : null,
-        onTimeRate: completed.length ? onTime.length / completed.length : null,
-        openNow: open.length,
-        overdueNow: open.filter((t) => t.overdue).length,
-        escalations: events.filter((e) => e.level >= 1).length,
-        compliance: running.length ? compliant.length / running.length : null,
-        avgReviewHours: turnaround.length ? turnaround.reduce((s, r) => s + r.hours, 0) / turnaround.length : null,
-        extensions: exts.length,
-      },
-      weeks,
-      byStatus: (['assigned', 'in_progress', 'submitted', 'changes_requested', 'reopened', 'completed', 'cancelled'] as Status[]).map((s) => ({ key: s, value: hist.filter((t) => t.status === s).length })),
-      byPriority: (['critical', 'high', 'normal', 'low'] as Priority[]).map((p) => ({ key: p, value: hist.filter((t) => t.priority === p).length, open: open.filter((t) => t.priority === p).length, overdue: open.filter((t) => t.priority === p && t.overdue).length })),
-      overdueByTeam: db.teams.map((tm) => ({ key: tm.name, value: open.filter((t) => t.teamId === tm.id && t.overdue).length })).filter((x) => x.value || f.teamId === ''),
-      escalationsByLevel: [0, 1, 2, 3].map((l) => ({ key: l, value: events.filter((e) => e.level === l).length, active: db.escalations.filter((e) => ids.has(e.taskId) && e.level === l && e.status !== 'resolved').length })),
-      staffRows,
-      teamRows,
-      giverRows,
-      reviewers,
-      turnaround,
-      extensions: exts.map((e) => ({ ...e, taskTitle: db.tasks.find((t) => t.id === e.taskId)?.title ?? '', requester: name(e.requestedBy), decider: e.decidedBy ? name(e.decidedBy) : '—', days: (ms(e.requestedDue) - ms(e.currentDue)) / DAY })),
-      overdue: open.filter((t) => t.overdue).sort((a, b) => a.dueAt.localeCompare(b.dueAt)),
-      tasks: hist,
-    };
+      ...payload,
+      ...extra,
+      activity: extra.activity,
+      range,
+      entity: entity || null,
+      scopeLabel: orgWide ? `${db.settings.orgName} · organization-wide` : layout === 'staff' ? 'Your assigned work' : `Your reporting line · ${reports.length} people`,
+      canCreate: hasPerm(db, user, 'create_tasks'),
+      overloadThreshold: db.settings.overloadThreshold,
+      entityOptions: orgWide ? db.departments.map((d) => ({ id: d.id, name: d.name })) : [],
+      l3Banner: l3Tasks.length
+        ? {
+            taskCount: l3Tasks.length,
+            unacked: new Set(l3.filter((e) => e.status === 'active').map((e) => e.taskId)).size,
+            tasks: l3Tasks.slice(0, 3).map((id) => {
+              const t = db.tasks.find((x) => x.id === id)!;
+              const ev = l3.find((e) => e.taskId === id)!;
+              return { id, title: t.title, assignee: nameOf(db)(t.assigneeId) ?? '', reason: ev.reason, since: ev.at, acknowledged: ev.status === 'acknowledged' };
+            }),
+          }
+        : null,
+      me: null, // PERF-07: the prototype has no scores
+    } as DashboardPayload;
   });
 }
 
-export type Report = ReturnType<typeof getReport>;
-
-export function getDashboard() {
+export async function getTeamOverview(): Promise<TeamOverview> {
+  if (BACKEND === 'server') return http<TeamOverview>('GET', '/team/overview');
   return read((db, user) => {
-    const visible = visibleTasks(db, user).filter((t) => t.status !== 'draft').map((t) => toView(db, t));
-    const mine = visible.filter((t) => t.assigneeId === user.id);
-    const scope = user.role === 'cos' ? visible : visible.filter((t) => reportsOf(db, user.id).has(t.assigneeId));
-    const isOpen = (t: TaskView) => ACTIVE_STATUSES.includes(t.status) || t.status === 'submitted';
-    const endOfDay = new Date(now());
-    endOfDay.setHours(23, 59, 59, 999);
-    const weekAgo = now() - 7 * DAY;
-    const trend = Array.from({ length: 8 }, (_, i) => {
-      const s = now() - (8 - i) * 7 * DAY;
-      const e = s + 7 * DAY;
-      const label = new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      return {
-        label,
-        mine: mine.filter((t) => t.completedAt && ms(t.completedAt) >= s && ms(t.completedAt) < e).length,
-        scope: scope.filter((t) => t.completedAt && ms(t.completedAt) >= s && ms(t.completedAt) < e).length,
-        created: scope.filter((t) => ms(t.createdAt) >= s && ms(t.createdAt) < e).length,
-        overdueClosed: scope.filter((t) => t.completedAt && ms(t.completedAt) >= s && ms(t.completedAt) < e && t.completedAt > t.dueAt).length,
-      };
-    });
-    const people = user.role === 'cos' ? db.users.filter((u) => u.id !== user.id) : db.users.filter((u) => reportsOf(db, user.id).has(u.id));
-    const workload = people
-      .filter((u) => u.status === 'active')
-      .map((u) => {
-        const o = scope.filter((t) => t.assigneeId === u.id && isOpen(t));
-        return { id: u.id, name: u.name, role: u.role, open: o.length, overdue: o.filter((t) => t.overdue).length, escalated: o.filter((t) => t.level >= 1).length };
-      })
-      .sort((a, b) => b.open - a.open);
-    const scopeIds = new Set(scope.map((t) => t.id));
-    const closedScope = scope.filter((t) => t.status === 'completed');
-    return {
-      mine: {
-        all: mine,
-        open: mine.filter(isOpen),
-        dueToday: mine.filter((t) => isOpen(t) && ms(t.dueAt) <= endOfDay.getTime() && !t.overdue),
-        overdue: mine.filter((t) => isOpen(t) && t.overdue),
-        awaitingReview: mine.filter((t) => t.status === 'submitted'),
-        recent: [...mine].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6),
-        upcoming: mine.filter((t) => isOpen(t) && !t.overdue).sort((a, b) => a.dueAt.localeCompare(b.dueAt)).slice(0, 6),
-        unacknowledged: mine.filter((t) => ACTIVE_STATUSES.includes(t.status) && !t.acknowledgedAt),
-        completedThisWeek: mine.filter((t) => t.completedAt && ms(t.completedAt) >= weekAgo).length,
-      },
-      scope: {
-        all: scope,
-        open: scope.filter(isOpen),
-        overdue: scope.filter((t) => isOpen(t) && t.overdue),
-        escalated: scope.filter((t) => isOpen(t) && t.level >= 1),
-        critical: scope.filter((t) => isOpen(t) && t.level >= 2),
-        awaitingReview: scope.filter((t) => t.status === 'submitted'),
-        stale: scope.filter((t) => ACTIVE_STATUSES.includes(t.status) && (t.levelInfo?.silenceLevel ?? -1) >= 0),
-        completionRate: scope.length ? closedScope.length / scope.filter((t) => t.status !== 'cancelled').length : null,
-        onTimeRate: closedScope.length ? closedScope.filter((t) => t.completedAt! <= t.dueAt).length / closedScope.length : null,
-        byLevel: [0, 1, 2, 3].map((l) => scope.filter((t) => isOpen(t) && t.level === l).length),
-        overdueByPriority: (['critical', 'high', 'normal', 'low'] as Priority[]).map((p) => ({ key: p, value: scope.filter((t) => isOpen(t) && t.overdue && t.priority === p).length })),
-        assignedByMe: visible.filter((t) => t.assignedBy === user.id && isOpen(t)),
-        pendingExtensions: db.extensions.filter((e) => e.status === 'pending' && scopeIds.has(e.taskId)).length,
-      },
-      trend,
-      workload,
-      teams: db.teams.map((tm) => {
-        const tv = scope.filter((t) => t.teamId === tm.id);
-        const closed = tv.filter((t) => t.status === 'completed');
-        return { id: tm.id, name: tm.name, open: tv.filter(isOpen).length, overdue: tv.filter((t) => isOpen(t) && t.overdue).length, escalated: tv.filter((t) => isOpen(t) && t.level >= 1).length, completionRate: tv.length ? closed.length / tv.filter((t) => t.status !== 'cancelled').length : null };
-      }).filter((t) => t.open || t.overdue || t.completionRate !== null),
-      staffStats: { total: db.users.length, active: db.users.filter((u) => u.status === 'active').length, noManager: db.users.filter((u) => !u.managerId && u.role !== 'cos').length },
-      recentAdmin: hasPerm(db, user, 'view_audit_logs') ? [...db.audit].filter((a) => a.source !== 'system').sort((a, b) => b.at.localeCompare(a.at)).slice(0, 6) : [],
-      notifications: db.notifications.filter((n) => n.userId === user.id).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5),
-      teamMembers: db.users.filter((u) => u.managerId === user.id),
-    };
+    const orgWide = isOrgWide(user);
+    const people = orgWide ? db.users.filter((u) => u.id !== user.id) : db.users.filter((u) => reportsOf(db, user.id).has(u.id));
+    if (!hasPerm(db, user, 'view_tasks') || (!orgWide && !people.length)) throw new ApiError(403, "You don't have permission to view your team.");
+    const tasks = visibleTasks(db, user).filter((t) => t.status !== 'draft').map((t) => dashTask(db, user, t));
+    return buildTeamOverview(
+      user.id,
+      people.map((u) => ({ id: u.id, name: u.name, title: u.title, active: u.status === 'active', roles: [u.role], teamId: u.teamId, managerId: u.managerId })),
+      tasks,
+      db.teams,
+      nameOf(db),
+    );
   });
 }
 
-export type Dashboard = ReturnType<typeof getDashboard>;

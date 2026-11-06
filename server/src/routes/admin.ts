@@ -124,10 +124,10 @@ adminRouter.post('/admin/digest', async (req, res) => {
 });
 
 // Demo only: move the simulated clock forward to watch the ladder climb. Disabled in production.
-adminRouter.post('/dev/clock', requireRole('cos'), async (req, res) => {
-  if (!config.demoTools) throw notFound();
+// G-2: 404 before the role check, so no caller learns the endpoint exists while demo tools are off.
+adminRouter.post('/dev/clock', (_req, _res, next) => next(config.demoTools ? undefined : notFound()), requireRole('cos'), async (req, res) => {
   const { user } = me(req);
-  const body = z.object({ advanceHours: z.number().min(0).max(24 * 30).optional(), reset: z.boolean().optional() }).parse(req.body);
+  const body = z.object({ advanceHours: z.number().min(0).max(24 * 30).optional(), reset: z.boolean().optional() }).strict().parse(req.body);
   const before = clock.getOffsetMs();
   const after = body.reset ? 0 : before + (body.advanceHours ?? 0) * HOUR;
   clock.setOffsetMs(after);

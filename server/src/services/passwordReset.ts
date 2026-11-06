@@ -7,6 +7,7 @@ import { HttpError } from '../http/errors.js';
 import { sendEmail } from '../notify/channels.js';
 import { appendAdmin } from './audit.js';
 import { endAllSessions, hashPassword, recordAttempt } from './auth.js';
+import { getDirectory } from './directory.js';
 
 const TOKEN_TTL_MS = 60 * 60_000;
 const HOUR_MS = 60 * 60_000;
@@ -105,12 +106,15 @@ export async function resetPassword(token: string, password: string, ip: string 
 /**
  * AUTH-05: someone with manage_staff sends another person a reset link and ends their sessions. Resetting a Chief of Staff needs the CoS role, so manage_staff alone cannot take over a CoS account.
  */
-export async function resetAccess(actor: { id: number; roles: string[] }, targetId: number): Promise<void> {
-  if (targetId === actor.id) throw new HttpError(422, 'Use "Forgot password" for your own account.');
-  const { rows } = await pool.query<{ id: number; email: string; roles: string[]; active: boolean }>('select id, email, roles, active from users where id = $1', [targetId]);
+/** AUTH-05: end someone's sessions and email them a reset link. D-98: a non-CoS may reset only themselves and people below them. */
+export async function resetAccess(actor: { id: number; roles: string[]; organizationId: number }, targetId: number): Promise<void> {
+  const { rows } = await pool.query<{ id: number; email: string; roles: string[]; active: boolean }>('select id, email, roles, active from users where id = $1 and organization_id = $2', [targetId, actor.organizationId]); // KI-39: never across organizations
   const target = rows[0];
   if (!target) throw new HttpError(404, 'Person not found.');
   if (target.roles.includes('cos') && !actor.roles.includes('cos')) throw new HttpError(403, 'Only a Chief of Staff can reset another Chief of Staff.');
+  if (!actor.roles.includes('cos') && targetId !== actor.id && !(await getDirectory(actor.organizationId)).descendants(actor.id).has(targetId)) {
+    throw new HttpError(403, 'You can only reset access for yourself or people below you in the reporting line.');
+  }
   await endAllSessions(targetId);
   if (target.active) await issueToken(target, actor.id);
   await appendAdmin(null, { actorId: actor.id, kind: 'access_reset', target: `user:${targetId}`, targetType: 'user' });

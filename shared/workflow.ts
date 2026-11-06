@@ -59,7 +59,9 @@ export type TaskAction =
   | 'edit'
   | 'comment'
   | 'attach'
-  | 'ack_escalation';
+  | 'ack_escalation'
+  /** PERF: the giver rates a finished task (outcome without a target) or accepts a shortfall or delay. */
+  | 'rate';
 
 /** The permissions allowedActions consults (a subset of the 15 in the role matrix). */
 export type ActionPermission = 'update_assigned_tasks' | 'review_tasks' | 'approve_extensions' | 'reassign_tasks' | 'assign_tasks' | 'create_tasks';
@@ -68,6 +70,8 @@ export interface ActionTask {
   status: Status;
   acknowledgedAt: unknown;
   reviewRequired: boolean;
+  /** PERF: something is waiting for the giver's rating (computed by the caller from the task's measures). */
+  ratable?: boolean;
 }
 
 /** What the caller knows about this person and task. Computed by each side from its own data. */
@@ -112,5 +116,6 @@ export function allowedActions(task: ActionTask, f: ActionFacts): Set<TaskAction
   // D-33: a read-only senior (the CEO by default) oversees everything but may not add files.
   if (!closed && (assignee || ((f.isOverseer || f.isGiver) && f.can('create_tasks')))) out.add('attach');
   if (f.mayAckEscalation) out.add('ack_escalation');
+  if (task.ratable && f.isGiver) out.add('rate');
   return out;
 }

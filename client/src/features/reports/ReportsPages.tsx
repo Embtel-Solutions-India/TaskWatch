@@ -5,10 +5,13 @@ import { BarList, ColumnChart, Donut, LineChart } from '../../components/charts'
 import { Icon } from '../../components/icons';
 import { Banner, Button, Card, Empty, ErrorState, Field, Input, PageHeader, Select, Skeleton, Stat } from '../../components/ui';
 import { useApi, useMe } from '../../hooks';
-import { getReport, reportScope, type Report, type ReportFilters } from '../../services/api/misc';
-import { getDb, now } from '../../services/mock/store';
-import { PRIORITIES, STATUSES } from '../../types';
-import { downloadCsv, formatShort, pct, toDateInput } from '../../utils/format';
+import { exportAccountability, exportReport, getAccountability, getReport, getReportOptions, reportScope, type Report, type ReportFilters } from '../../services/api/misc';
+import { BACKEND } from '../../services/http';
+import { now } from '../../services/mock/store';
+import { isReportId, REPORT_STATUSES } from '@taskwatch/shared/reports';
+import { RANGES, type Range } from '@taskwatch/shared/insights';
+import { PRIORITIES } from '../../types';
+import { formatDateTime, formatShort, hoursLabel, pct, toDateInput } from '../../utils/format';
 
 interface Def {
   id: string;
@@ -38,13 +41,17 @@ const DEFINITIONS: Record<string, string> = {
   'Avg review time': 'Hours from submission to decision, for decisions on submissions made within the range.',
 };
 
+/** RPT-05/06 (WO FR-11). Server only: the prototype has no first-response data. */
+const FR11: Def = { id: 'entities', title: 'Entity & Person Accountability', question: 'Per entity: open, on track, amber, red, longest silence. Per person: first response, escalations, on-time %.', icon: 'layers' };
+
 export function ReportsIndexPage() {
-  const scope = reportScope();
+  const scope = useApi(['report-scope'], reportScope);
+  if (scope.error) return <ErrorState error={scope.error} />;
   return (
     <div className="page">
-      <PageHeader title="Accountability Reports" description={scope === 'org' ? 'Organization-wide reports.' : 'Reports scoped to your reporting line.'} />
+      <PageHeader title="Accountability Reports" description={!scope.data ? '' : scope.data === 'org' ? 'Organization-wide reports.' : 'Reports scoped to your reporting line.'} />
       <div className="report-grid">
-        {REPORTS.map((r) => (
+        {(BACKEND === 'server' ? [FR11, ...REPORTS] : REPORTS).map((r) => (
           <Link key={r.id} to={`/reports/${r.id}`} className="report-tile">
             <span className="report-icon">
               <Icon name={r.icon} size={18} />
@@ -75,17 +82,19 @@ export function ReportPage() {
   const { reportId = '' } = useParams();
   const user = useMe();
   const def = REPORTS.find((r) => r.id === reportId);
-  const db = getDb();
   const [f, setF] = useState<ReportFilters>(() => ({ from: toDateInput(now() - 30 * 86_400_000), to: toDateInput(now()), teamId: '', userId: '', giverId: '', priority: '', status: '', level: '' }));
   const q = useApi(['report', user.id, JSON.stringify(f)], () => getReport(f));
+  const opts = useApi(['report-options', user.id], getReportOptions);
   const set = <K extends keyof ReportFilters>(k: K, v: ReportFilters[K]) => setF((x) => ({ ...x, [k]: v }));
-  if (!def) return <ErrorState error={{ status: 404, message: 'Unknown report.' }} />;
-  if (q.error) return <ErrorState error={q.error} />;
-  const r = q.data;
-  const people = db.users.filter((u) => u.status === 'active');
+  if (!def || !isReportId(def.id)) return <ErrorState error={{ status: 404, message: 'Unknown report.' }} />;
+  const bad = q.error?.status === 422; // a filter the user can fix keeps the page
+  if (q.error && !bad) return <ErrorState error={q.error} />;
+  if (opts.error) return <ErrorState error={opts.error} />;
+  const r = bad ? undefined : q.data;
+  const id = def.id;
   return (
     <div className="page">
-      <PageHeader title={`${def.title} report`} description={def.question} actions={r && <Button icon="download" onClick={() => exportReport(def.id, r)}>Export CSV</Button>} />
+      <PageHeader title={`${def.title} report`} description={def.question} actions={r && <Button icon="download" onClick={() => exportReport(id, f, r)}>Export CSV</Button>} />
       <div className="report-filters card">
         <Field label="From" htmlFor="rf-from">
           <Input id="rf-from" type="date" value={f.from} onChange={(e) => set('from', e.target.value)} className="input-sm" />
@@ -96,19 +105,19 @@ export function ReportPage() {
         <Field label="Team" htmlFor="rf-team">
           <Select id="rf-team" value={f.teamId} onChange={(e) => set('teamId', e.target.value)} className="input-sm">
             <option value="">All</option>
-            {db.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            {opts.data?.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </Select>
         </Field>
         <Field label="Staff member" htmlFor="rf-user">
           <Select id="rf-user" value={f.userId} onChange={(e) => set('userId', e.target.value)} className="input-sm">
             <option value="">All</option>
-            {people.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            {opts.data?.people.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </Select>
         </Field>
         <Field label="Task giver" htmlFor="rf-giver">
           <Select id="rf-giver" value={f.giverId} onChange={(e) => set('giverId', e.target.value)} className="input-sm">
             <option value="">All</option>
-            {people.filter((u) => u.role !== 'staff').map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            {opts.data?.givers.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </Select>
         </Field>
         <Field label="Priority" htmlFor="rf-pr">
@@ -120,7 +129,7 @@ export function ReportPage() {
         <Field label="Status" htmlFor="rf-st">
           <Select id="rf-st" value={f.status} onChange={(e) => set('status', e.target.value as ReportFilters['status'])} className="input-sm">
             <option value="">All</option>
-            {STATUSES.filter((s) => s !== 'draft').map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+            {REPORT_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
           </Select>
         </Field>
         <Field label="Escalation" htmlFor="rf-lv">
@@ -131,7 +140,9 @@ export function ReportPage() {
           </Select>
         </Field>
       </div>
-      {!r ? (
+      {bad ? (
+        <Banner tone="danger">{q.error!.message}</Banner>
+      ) : !r ? (
         <Skeleton rows={10} />
       ) : (
         <>
@@ -237,7 +248,7 @@ function ReportBody({ id, r }: { id: string; r: Report }) {
             <Card title="Turnaround by reviewer"><BarList label="Average hours" format={(v) => `${v.toFixed(1)} h`} data={r.reviewers.map((x) => ({ label: x.reviewer, value: x.avgHours, tone: 'series-violet', hint: `${x.reviews} reviews` }))} /></Card>
             <Card title="Reviewers"><T head={['Reviewer', 'Reviews', 'Avg hours', 'Sent back']} rows={r.reviewers.map((x) => [x.reviewer, x.reviews, x.avgHours.toFixed(1), pct(x.changesRate)])} /></Card>
           </div>
-          <Card title="Submissions"><LineChart categories={r.turnaround.slice(-20).map((x) => x.taskId)} series={[{ name: 'Hours to decision', values: r.turnaround.slice(-20).map((x) => Math.round(x.hours * 10) / 10), tone: 'series-1' }]} label="Hours to decision per submission" /></Card>
+          <Card title="Submissions"><LineChart categories={r.turnaround.slice(-20).map((x) => String(x.taskId))} series={[{ name: 'Hours to decision', values: r.turnaround.slice(-20).map((x) => Math.round(x.hours * 10) / 10), tone: 'series-1' }]} label="Hours to decision per submission" /></Card>
         </>
       );
     case 'extensions':
@@ -257,19 +268,58 @@ function ReportBody({ id, r }: { id: string; r: Report }) {
   }
 }
 
-function exportReport(id: string, r: Report) {
-  const file = `taskwatch-report-${id}-${new Date().toISOString().slice(0, 10)}.csv`;
-  const map: Record<string, (string | number | null | undefined)[][]> = {
-    completion: [['Team', 'Created', 'Completed', 'Completion rate', 'On-time rate'], ...r.teamRows.map((t) => [t.name, t.assigned, t.completed, t.completionRate, t.onTimeRate])],
-    overdue: [['Task', 'Title', 'Assignee', 'Priority', 'Due', 'Level'], ...r.overdue.map((t) => [t.id, t.title, t.assignee?.name, t.priority, t.dueAt, t.level])],
-    escalations: [['Level', 'Triggered in range', 'Open now'], ...r.escalationsByLevel.map((l) => [`L${l.key}`, l.value, l.active])],
-    accountability: [['Staff', 'Team', 'Assigned', 'Completed', 'On-time rate', 'Update compliance', 'Open now', 'Overdue now', 'L1+ escalations'], ...r.staffRows.map((s) => [s.name, s.team, s.assigned, s.completed, s.onTimeRate, s.compliance, s.openNow, s.overdueNow, s.escalations])],
-    teams: [['Team', 'Created', 'Completed', 'Completion', 'On-time', 'Open now', 'Overdue now', 'Escalations'], ...r.teamRows.map((t) => [t.name, t.assigned, t.completed, t.completionRate, t.onTimeRate, t.openNow, t.overdueNow, t.escalations])],
-    assignments: [['Task giver', 'Role', 'Assigned', 'Open', 'Completed', 'Overdue', 'Reassignments'], ...r.giverRows.map((g) => [g.name, g.role, g.assigned, g.open, g.completed, g.overdue, g.reassigned])],
-    compliance: [['Staff', 'Active tasks', 'Compliance'], ...r.staffRows.map((s) => [s.name, s.openNow, s.compliance])],
-    reviews: [['Task', 'Round', 'Reviewer', 'Decision', 'Hours', 'Submitted'], ...r.turnaround.map((t) => [t.taskId, t.round, t.reviewer, t.decision, t.hours.toFixed(2), t.submittedAt])],
-    extensions: [['Task', 'Requested by', 'Current due', 'Requested due', 'Days', 'Reason', 'Status', 'Decided by'], ...r.extensions.map((e) => [e.taskId, e.requester, e.currentDue, e.requestedDue, e.days.toFixed(1), e.reason, e.status, e.decider])],
-  };
-  downloadCsv(file, map[id] ?? []);
+/** RPT-05…07: WO FR-11 by entity and by person, with CSV and PDF (server only). */
+export function AccountabilityPage() {
+  const [days, setDays] = useState<Range>(30);
+  const q = useApi(['accountability', days], () => getAccountability(days));
+  if (q.error) return <ErrorState error={q.error} />;
+  const a = q.data;
+  return (
+    <div className="page">
+      <PageHeader
+        title={FR11.title}
+        description={a ? `${a.scope} · generated ${formatDateTime(a.generatedAt)}` : FR11.question}
+        actions={
+          <>
+            <Button icon="download" onClick={() => exportAccountability(days, 'csv')}>Export CSV</Button>
+            <Button icon="download" onClick={() => exportAccountability(days, 'pdf')}>Export PDF</Button>
+          </>
+        }
+      />
+      <div className="report-filters card">
+        <Field label="Period" htmlFor="acc-days">
+          <Select id="acc-days" value={days} onChange={(e) => setDays(Number(e.target.value) as Range)} className="input-sm">
+            {RANGES.map((d) => <option key={d} value={d}>Last {d} days</option>)}
+          </Select>
+        </Field>
+      </div>
+      {!a ? (
+        <Skeleton rows={10} />
+      ) : (
+        <>
+          <Card title="By entity" sub="Open tasks now. Amber = L0–L1, red = L2–L3. The period applies to the person table only.">
+            <T
+              head={['Entity', 'Open', 'On track', 'Amber', 'Red', 'Blocked', 'Longest silence', 'Longest-silent task']}
+              rows={a.byEntity.map((e) => [
+                e.entityName,
+                e.open,
+                e.onTrack,
+                e.amber,
+                e.red,
+                e.blocked,
+                e.longestSilenceHours === null ? '—' : hoursLabel(e.longestSilenceHours),
+                e.longestSilenceTask ? <Link key={e.entityId} to={`/tasks/${e.longestSilenceTask.id}`}>#{e.longestSilenceTask.id} {e.longestSilenceTask.title} ({e.longestSilenceTask.assignee})</Link> : '—',
+              ])}
+            />
+          </Card>
+          <Card title="By person" sub={`First response, escalations and closures in the last ${a.days} days; open tasks now.`}>
+            <T
+              head={['Person', 'Entity', 'Open tasks', 'Avg first response', 'Escalations (L1+)', 'Closed', 'On time', 'On-time %']}
+              rows={a.byPerson.map((p) => [p.name, p.entityId, p.open, p.avgFirstResponseHours === null ? '—' : `${p.avgFirstResponseHours.toFixed(1)} h`, p.escalations, p.closed, p.onTime, p.onTimePct === null ? '—' : `${p.onTimePct}%`])}
+            />
+          </Card>
+        </>
+      )}
+    </div>
+  );
 }
-

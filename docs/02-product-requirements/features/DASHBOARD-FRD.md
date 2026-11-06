@@ -4,6 +4,10 @@
 > Common rules C-1..C-7 live in [PRODUCT_REQUIREMENTS.md §2](../PRODUCT_REQUIREMENTS.md). The WO FR-11 accountability tables (by entity / by person, CSV + PDF) are specified in [REPORTS-FRD.md](REPORTS-FRD.md) (RPT-05..07) and only linked here.
 > Every rule in §1 is transcribed from `features/dashboard/insights.ts` and `services/api/misc.ts:getDashboard`. Thresholds are exact. Nothing here has been executed. No test has been run.
 
+**Built 2026-11-06 (Phase 8 Batch A, T-8.1/T-8.2; server).** §1 rules and the per-layout composition are `shared/insights.ts` (`buildDashboard`, D-9/ADR-0007), epoch ms in, ISO out, days in the viewer's zone. `GET /api/dashboard` (`services/dashboard.ts` `roleDashboard`) gathers the scope with `queries.ts dashboardTasks` (the visibility rule = D-51 scope, non-draft) and returns the layout's widgets plus `l3Banner` and `me` (PERF-07). `GET /api/team/overview` (`teamOverview`). Deviations: the submitted-and-past-due quirk (§1.4 D) now reads "Past due (in review)"; staff-by-role counts each person once under their highest role. Client (T-8.5) is Batch B.
+
+**Built 2026-11-06 (Batch B, T-8.5; client). DASH-01…03 code-complete.** `DashboardPage.tsx` and `TeamPage.tsx` render only the payload of `getDashboard(range, entity)` / `getTeamOverview()` (`services/api/misc.ts`); no `getDb()` in either (DASH-03-AC-4). The mock builds the same payload by calling the shared `buildDashboard` / `buildTeamOverview`. Team overview composition moved into `shared/insights.ts` too. The CoS filter is now labelled "Entity" (D-4). "New task" follows `canCreate` (AC-8). Browser-checked in server mode as CoS, manager, lead and staff, and in mock mode as CoS. Deviation: the attention item's level badge no longer shows the "acknowledged" style (the brief carries no ack flag).
+
 **Hard requirement (DASH-03): every number on a dashboard is computed on the server, over data the viewer may see.** Today the client computes everything in the browser and reads the raw store for many widgets. [V-C `features/dashboard/DashboardPage.tsx:33, :107-119, :262, :358, :447, :486`]
 
 ---

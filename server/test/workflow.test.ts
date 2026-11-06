@@ -60,4 +60,12 @@ describe('shared workflow', () => {
     for (const x of ['progress', 'complete', 'block', 'attach'] as const) assert.ok(!a.has(x), x);
     assert.ok(a.has('comment'));
   });
+
+  it('PERF: the giver may rate a ratable task; the assignee and other overseers may not', () => {
+    const ratable = { ...task('completed'), ratable: true };
+    assert.ok(allowedActions(ratable, facts({ isGiver: true, isOverseer: true })).has('rate'));
+    assert.ok(!allowedActions(ratable, assignee()).has('rate'));
+    assert.ok(!allowedActions(ratable, facts({ isOverseer: true })).has('rate'), 'a supervisor who did not give the task');
+    assert.ok(!allowedActions(task('completed'), facts({ isGiver: true })).has('rate'), 'nothing to rate');
+  });
 });

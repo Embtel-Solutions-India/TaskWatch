@@ -10,6 +10,9 @@
     "./permissions": "./permissions.ts",
     "./settings": "./settings.ts",
     "./notifications": "./notifications.ts",
-    "./recurrence": "./recurrence.ts"
+    "./recurrence": "./recurrence.ts",
+    "./performance": "./performance.ts",
+    "./insights": "./insights.ts",
+    "./reports": "./reports.ts"
   }
 }

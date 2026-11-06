@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { PRIORITIES } from '../domain.js';
 import { idParam, me, requireUser } from '../http/middleware.js';
 import { deleteRecurring, listRecurring, saveRecurring, setRecurringActive } from '../services/recurring.js';
+import { measuredFields } from './tasks.js';
 
 export const recurringRouter = Router();
 recurringRouter.use(requireUser);
@@ -28,8 +29,10 @@ const scheduleBody = z
     startDate: z.string().regex(DAY, { error: 'Choose a start date.' }),
     endDate: z.string().regex(DAY, { error: 'Choose a valid end date.' }).nullable().default(null),
     dueHour: int('Between 0 and 23.'),
+    ...measuredFields,
   })
-  .strict();
+  .strict()
+  .transform((b) => ({ ...b, unit: b.unit || null }));
 
 // REC-01
 recurringRouter.get('/recurring', async (req, res) => {

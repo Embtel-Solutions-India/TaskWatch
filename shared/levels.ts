@@ -103,7 +103,7 @@ function minutesOf(hhmm: string): number {
 }
 
 /** Wall-clock fields of instant `t` in `timeZone`. */
-function wallClock(timeZone: string, t: number) {
+export function wallClock(timeZone: string, t: number) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
     hourCycle: 'h23',
@@ -129,7 +129,7 @@ function offsetAt(timeZone: string, t: number): number {
  * naive guess and the answer near a DST change, so the guess is corrected until the offset is consistent.
  * A wall time skipped by spring-forward has no instant; it resolves to the moment just after the gap.
  */
-function zonedInstant(timeZone: string, year: number, month: number, day: number, hour: number, minute: number): number {
+export function zonedInstant(timeZone: string, year: number, month: number, day: number, hour: number, minute: number): number {
   const asUtc = Date.UTC(year, month - 1, day, hour, minute);
   const o1 = offsetAt(timeZone, asUtc);
   const t1 = asUtc - o1;

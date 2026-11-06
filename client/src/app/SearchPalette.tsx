@@ -3,10 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { ROLE_LABEL } from '../constants';
 import { Icon } from '../components/icons';
 import { Avatar, Dialog, LevelBadge, StatusBadge } from '../components/ui';
-import { useLocalState, useMe } from '../hooks';
-import { search } from '../services/api/misc';
-import { hasPerm } from '../services/authz/permissions';
-import { getDb } from '../services/mock/store';
+import { useCan, useLocalState, useMe } from '../hooks';
+import { search, type SearchResult } from '../services/api/misc';
+import type { Role } from '../types';
 import { cx } from '../utils/format';
 
 interface Item {
@@ -24,6 +23,23 @@ export function SearchPalette({ open, onClose }: { open: boolean; onClose: () =>
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
   const [recent, setRecent] = useLocalState<string[]>(`recent-search.${user.id}`, []);
+  const canStaff = useCan('manage_staff');
+  // SRCH-01-AC-6: one request per pause in typing; a reply for an older query is dropped.
+  const [res, setRes] = useState<{ q: string; r: SearchResult } | null>(null);
+  useEffect(() => {
+    const text = q.trim();
+    if (!open || !text) return setRes(null);
+    let live = true;
+    const timer = setTimeout(() => {
+      Promise.resolve(search(text))
+        .then((r) => live && setRes({ q: text, r }))
+        .catch(() => live && setRes({ q: text, r: { tasks: [], people: [], teams: [] } }));
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [q, open]);
 
   useEffect(() => {
     if (open) {
@@ -36,17 +52,16 @@ export function SearchPalette({ open, onClose }: { open: boolean; onClose: () =>
     if (!open) return [];
     if (!q.trim())
       return recent.map((r) => ({ key: `r-${r}`, group: 'Recent' as const, label: r, sub: 'Recent search', go: () => setQ(r) }));
-    const res = search(q); // permission-aware in the service
-    const db = getDb();
-    const canStaff = hasPerm(db, user, 'manage_staff');
+    if (!res || res.q !== q.trim()) return [];
+    const { r } = res; // permission-aware on the server (or the mock)
     const close = (to: string) => () => {
       setRecent([q.trim(), ...recent.filter((x) => x !== q.trim())].slice(0, 6));
       onClose();
       nav(to);
     };
     return [
-      ...res.tasks.map((t) => ({
-        key: t.id,
+      ...r.tasks.map((t) => ({
+        key: `t-${t.id}`,
         group: 'Tasks' as const,
         label: `${t.id} · ${t.title}`,
         sub: `${t.assignee?.name ?? ''} · from ${t.giver?.name ?? ''}${t.team ? ` · ${t.team.name}` : ''}`,
@@ -58,17 +73,17 @@ export function SearchPalette({ open, onClose }: { open: boolean; onClose: () =>
           </span>
         ),
       })),
-      ...res.people.map((p) => ({
-        key: p.id,
+      ...r.people.map((p) => ({
+        key: `p-${p.id}`,
         group: 'People' as const,
         label: p.name,
-        sub: `${p.title} · ${ROLE_LABEL[p.role]}`,
-        go: close(canStaff ? `/admin/staff/${p.id}` : p.id === user.id ? '/profile' : `/admin/staff/${p.id}`),
+        sub: `${p.title ?? ''} · ${ROLE_LABEL[(['ceo', 'cos', 'manager', 'lead', 'staff'] as const).find((x) => p.roles.includes(x)) as Role]}${p.active ? '' : ' · inactive'}`,
+        go: close(canStaff ? `/admin/staff/${p.id}` : String(p.id) === String(user.id) ? '/profile' : `/admin/staff/${p.id}`),
         render: <Avatar name={p.name} size={22} />,
       })),
-      ...res.teams.map((t) => ({ key: t.id, group: 'Teams' as const, label: t.name, sub: 'Team · open team tasks', go: close(`/tasks/team?team=${t.id}`) })),
+      ...r.teams.map((t) => ({ key: `g-${t.id}`, group: 'Teams' as const, label: t.name, sub: 'Team · open team tasks', go: close(`/tasks/team?team=${t.id}`) })),
     ];
-  }, [q, open, recent, user, nav, onClose, setRecent]);
+  }, [q, open, res, recent, canStaff, user, nav, onClose, setRecent]);
 
   useEffect(() => setActive(0), [q]);
 

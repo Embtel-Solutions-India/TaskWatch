@@ -1,7 +1,7 @@
 // AUTH-01-AC-8 / SEC-10: directory (dev) sign-in can never be on in production (T-2.2). Pure: no server, no DB.
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { devLoginAllowed, engineIntervalMs } from '../src/config.js';
+import { demoToolsAllowed, devLoginAllowed, engineIntervalMs } from '../src/config.js';
 
 describe('dev login gate', () => {
   it('is off in production whatever else is set', () => {
@@ -23,5 +23,14 @@ describe('engine interval (T-5.5; ESC-08, WO FR-8)', () => {
   });
   it('refuses to start with an interval over 5 minutes, or a nonsense one', () => {
     for (const v of ['300001', '3600000', '0', 'abc', '1500.5']) assert.throws(() => engineIntervalMs({ ENGINE_INTERVAL_MS: v }), /ENGINE_INTERVAL_MS/, v);
+  });
+});
+
+describe('demo tools gate (DEMO-01 G-1, G-4; D-47)', () => {
+  it('is off in production whatever else is set, and off by default elsewhere', () => {
+    assert.equal(demoToolsAllowed({ NODE_ENV: 'production', DEMO_TOOLS: 'true' }), false);
+    assert.equal(demoToolsAllowed({}), false);
+    assert.equal(demoToolsAllowed({ NODE_ENV: 'development' }), false);
+    assert.equal(demoToolsAllowed({ NODE_ENV: 'development', DEMO_TOOLS: 'true' }), true);
   });
 });

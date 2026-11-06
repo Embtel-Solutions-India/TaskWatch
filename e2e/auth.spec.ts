@@ -33,7 +33,9 @@ test('staff: a wrong password is refused with the generic message; the right one
   await expect(page.getByText('That email and password combination is not recognized.')).toBeVisible();
   await passwordSignIn(page, STAFF.email, E2E_PASSWORD);
   await expect(userMenu(page, STAFF.name)).toBeVisible();
-  await expect(page.getByText(/is not connected to the server yet/)).toBeVisible();
+  // The Overview is on the server since Phase 8 (DASH-01): a staff member lands on their own dashboard.
+  await expect(page.getByRole('heading', { name: 'My day' })).toBeVisible();
+  await expect(page.getByText('Your assigned work')).toBeVisible();
   await signOut(page, STAFF.name);
 });
 

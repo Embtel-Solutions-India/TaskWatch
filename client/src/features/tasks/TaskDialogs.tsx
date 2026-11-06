@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { HOUR, ROLE_LABEL } from '../../constants';
-import { Banner, Button, Dialog, Field, FilePicker, Input, Select, Textarea } from '../../components/ui';
+import { Banner, Button, Checkbox, Dialog, Field, FilePicker, Input, Select, Textarea } from '../../components/ui';
 import { useAction, useApi } from '../../hooks';
 import { BACKEND } from '../../services/http';
 import type { TaskView } from '../../services/api/base';
-import { ackEscalation, assigneeOptions, cancelTask, completeTask, decideExtension, postProgress, reassignTask, reopenTask, requestExtension, reviewTask, submitForReview } from '../../services/api/tasks';
+import { ackEscalation, assigneeOptions, cancelTask, completeTask, decideExtension, postProgress, rateTask, reassignTask, reopenTask, requestExtension, reviewTask, submitForReview, type FinishReport } from '../../services/api/tasks';
 import { getDb, now } from '../../services/mock/store';
 import type { Extension, Review } from '../../types';
 
@@ -13,7 +13,7 @@ const personOn = (task: TaskView, id: string | null) =>
   BACKEND === 'server' ? [task.assignee, task.giver].find((u) => u?.id === id)?.name : getDb().users.find((u) => u.id === id)?.name;
 import { formatDateTime, toDateInput, toTimeInput } from '../../utils/format';
 
-export type DialogKind = 'progress' | 'submit' | 'complete' | 'review' | 'extension' | 'decide' | 'reassign' | 'cancel' | 'reopen' | 'ack_escalation' | null;
+export type DialogKind = 'progress' | 'submit' | 'complete' | 'review' | 'extension' | 'decide' | 'reassign' | 'cancel' | 'reopen' | 'ack_escalation' | 'rate' | null;
 
 interface Base {
   task: TaskView;
@@ -33,20 +33,88 @@ function Foot({ onClose, label, pending, danger, form }: { onClose: () => void; 
   );
 }
 
+/** PERF: achieved (tasks with a target), result, and the reason a shortfall or late finish needs. Server mode only. */
+function useFinish(task: TaskView) {
+  const [achieved, setAchieved] = useState(task.achieved != null ? String(task.achieved) : '');
+  const [result, setResult] = useState(task.result ?? '');
+  const [reason, setReason] = useState(task.shortfallReason ?? '');
+  const report = (): FinishReport =>
+    BACKEND === 'server' ? { ...(task.target != null && achieved !== '' ? { achieved: Number(achieved) } : {}), result, shortfallReason: reason } : {};
+  const fields = (errors: Record<string, string>) =>
+    BACKEND !== 'server' ? null : (
+      <>
+        {task.target != null && (
+          <Field label={`Achieved (target ${task.target} ${task.unit ?? ''})`} htmlFor="f-ach" error={errors.achieved}>
+            <Input id="f-ach" type="number" min={0} step="any" value={achieved} onChange={(e) => setAchieved(e.target.value)} invalid={!!errors.achieved} />
+          </Field>
+        )}
+        <Field label="Result" htmlFor="f-res" hint="What came of it, e.g. 6 replies, 2 consultations booked." error={errors.result}>
+          <Textarea id="f-res" rows={2} maxLength={1000} value={result} onChange={(e) => setResult(e.target.value)} />
+        </Field>
+        <Field label="Reason for a shortfall or delay" htmlFor="f-why" hint="Required when short of the target or past the due date." error={errors.shortfallReason}>
+          <Textarea id="f-why" rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} invalid={!!errors.shortfallReason} />
+        </Field>
+      </>
+    );
+  return { report, fields };
+}
+
+/** PERF Rate step: the giver scores a task without a target and/or decides on a shortfall or delay reason. */
+export function RateDialog({ task, onClose }: Base) {
+  const needsOutcome = task.target == null && task.status === 'completed' && task.outcomeScore == null;
+  const reason = task.shortfallReason ?? task.blockedReason;
+  const [outcome, setOutcome] = useState(task.outcomeScore != null ? String(task.outcomeScore) : '');
+  const [accept, setAccept] = useState<'' | 'yes' | 'no'>(task.shortfallAccepted == null ? '' : task.shortfallAccepted ? 'yes' : 'no');
+  const a = useAction(rateTask, { success: 'Rating saved', onSuccess: onClose });
+  const input = () => ({
+    ...(task.target == null && outcome !== '' ? { outcomeScore: Number(outcome) } : {}),
+    ...(reason && accept ? { shortfallAccepted: accept === 'yes' } : {}),
+  });
+  return (
+    <Dialog open onClose={onClose} title={`Rate ${task.id}`} description="Ratings feed the outcome and timeliness scores. An accepted shortfall or delay does not count against the assignee." footer={<Foot onClose={onClose} label="Save rating" pending={a.pending} form="f-rate" />}>
+      <form id="f-rate" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id, input()))}>
+        {task.result && <blockquote className="quote"><strong>Result:</strong> {task.result}</blockquote>}
+        {task.target == null && (
+          <Field label="Outcome score (0–100)" required={needsOutcome} htmlFor="rt-out" hint="How much of the expected outcome was achieved." error={a.fields.outcomeScore ?? a.fields._}>
+            <Input id="rt-out" type="number" min={0} max={100} step={1} value={outcome} onChange={(e) => setOutcome(e.target.value)} invalid={!!a.fields.outcomeScore} />
+          </Field>
+        )}
+        {reason && (
+          <Field label={`Reason given: “${reason}”`} htmlFor="rt-acc" hint="Accept it if the shortfall or delay was outside their control." error={a.fields.shortfallAccepted}>
+            <Select id="rt-acc" value={accept} onChange={(e) => setAccept(e.target.value as typeof accept)}>
+              <option value="">Decide later</option>
+              <option value="yes">Accept: not counted against them</option>
+              <option value="no">Do not accept</option>
+            </Select>
+          </Field>
+        )}
+      </form>
+    </Dialog>
+  );
+}
+
 export function ProgressDialog({ task, onClose }: Base) {
   const [message, setMessage] = useState('');
+  const measured = BACKEND === 'server' && task.target != null;
+  const [achieved, setAchieved] = useState(task.achieved != null ? String(task.achieved) : '');
   const [percent, setPercent] = useState(Math.min(100, task.progress + 10));
   const [files, setFiles] = useState<File[]>([]);
   const a = useAction(postProgress, { success: 'Progress posted. The silence clock has been reset.', onSuccess: onClose });
   return (
     <Dialog open onClose={onClose} title="Post a progress update" description="Progress updates reset the silence clock. Comments do not." footer={<Foot onClose={onClose} label="Post update" pending={a.pending} form="f-progress" />}>
-      <form id="f-progress" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id, { message, percent, files }))}>
+      <form id="f-progress" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id, { message, percent, files, ...(measured && achieved !== '' ? { achieved: Number(achieved) } : {}) }))}>
         <Field label="What changed?" required htmlFor="p-msg" error={a.fields.message}>
           <Textarea id="p-msg" rows={4} autoFocus value={message} onChange={(e) => setMessage(e.target.value)} invalid={!!a.fields.message} placeholder="Done, in progress, blockers, next step…" />
         </Field>
-        <Field label={`Progress: ${percent}%`} htmlFor="p-pct" error={a.fields.percent}>
-          <input id="p-pct" type="range" min={0} max={100} step={5} value={percent} onChange={(e) => setPercent(Number(e.target.value))} className="range" />
-        </Field>
+        {measured ? (
+          <Field label={`Achieved so far (target ${task.target} ${task.unit ?? ''})`} htmlFor="p-ach" hint="Progress is worked out from this." error={a.fields.achieved}>
+            <Input id="p-ach" type="number" min={0} step="any" value={achieved} onChange={(e) => setAchieved(e.target.value)} invalid={!!a.fields.achieved} />
+          </Field>
+        ) : (
+          <Field label={`Progress: ${percent}%`} htmlFor="p-pct" error={a.fields.percent}>
+            <input id="p-pct" type="range" min={0} max={100} step={5} value={percent} onChange={(e) => setPercent(Number(e.target.value))} className="range" />
+          </Field>
+        )}
         <Field label="Supporting files">
           <FilePicker files={files} onChange={setFiles} />
         </Field>
@@ -59,13 +127,15 @@ export function SubmitDialog({ task, onClose }: Base) {
   const [note, setNote] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const a = useAction(submitForReview, { success: `${task.id} submitted for review`, onSuccess: onClose });
+  const finish = useFinish(task);
   const reviewerName = personOn(task, task.reviewerId);
   return (
     <Dialog open onClose={onClose} title="Submit for review" description={`${reviewerName ?? 'The reviewer'} will be asked to approve or request changes.`} footer={<Foot onClose={onClose} label="Submit" pending={a.pending} form="f-submit" />}>
-      <form id="f-submit" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id, { note, files }))}>
+      <form id="f-submit" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id, { note, files, ...finish.report() }))}>
         <Field label="Submission summary" required htmlFor="s-note" error={a.fields.note}>
           <Textarea id="s-note" rows={4} autoFocus value={note} onChange={(e) => setNote(e.target.value)} invalid={!!a.fields.note} placeholder="What you delivered and where to find it" />
         </Field>
+        {finish.fields(a.fields)}
         <Field label="Deliverables">
           <FilePicker files={files} onChange={setFiles} />
         </Field>
@@ -77,13 +147,15 @@ export function SubmitDialog({ task, onClose }: Base) {
 export function CompleteDialog({ task, onClose }: Base) {
   const [note, setNote] = useState('');
   const a = useAction(completeTask, { success: `${task.id} completed`, onSuccess: onClose });
+  const finish = useFinish(task);
   return (
     <Dialog open onClose={onClose} size="sm" title="Mark as complete" footer={<Foot onClose={onClose} label="Complete task" pending={a.pending} form="f-complete" />}>
-      <form id="f-complete" className="stack" onSubmit={(e) => (e.preventDefault(), a.run(task.id, note))}>
+      <form id="f-complete" className="stack" onSubmit={(e) => (e.preventDefault(), a.run(task.id, note, finish.report()))}>
         <p>This task does not require review, so completing it closes it immediately. The task giver is notified.</p>
         <Field label="Closing note" htmlFor="c-note" hint="Optional.">
           <Textarea id="c-note" rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
+        {finish.fields(a.fields)}
       </form>
     </Dialog>
   );
@@ -92,10 +164,23 @@ export function CompleteDialog({ task, onClose }: Base) {
 export function ReviewDialog({ task, submission, onClose }: Base & { submission?: Review }) {
   const [decision, setDecision] = useState<'approved' | 'changes_requested' | 'rejected'>('approved');
   const [comment, setComment] = useState('');
+  const [quality, setQuality] = useState('');
+  const [outcome, setOutcome] = useState('');
+  const [accept, setAccept] = useState(false);
+  const scores = BACKEND === 'server' && decision === 'approved';
   const a = useAction(reviewTask, { success: decision === 'approved' ? `${task.id} approved and completed` : `Sent back to ${task.assignee?.name}`, onSuccess: onClose });
   return (
     <Dialog open onClose={onClose} title={`Review ${task.id}`} description={submission ? `Round ${submission.round} · submitted ${formatDateTime(submission.submittedAt)}` : undefined} footer={<Foot onClose={onClose} label={decision === 'approved' ? 'Approve' : decision === 'rejected' ? 'Reject' : 'Request changes'} danger={decision === 'rejected'} pending={a.pending} form="f-review" />}>
-      <form id="f-review" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id, { decision, comment }))}>
+      <form id="f-review" className="stack" noValidate onSubmit={(e) =>
+          (e.preventDefault(),
+          a.run(task.id, {
+            decision,
+            comment,
+            ...(scores && quality !== '' ? { qualityScore: Number(quality) } : {}),
+            ...(scores && task.target == null && outcome !== '' ? { outcomeScore: Number(outcome) } : {}),
+            ...(scores && task.shortfallReason && accept ? { shortfallAccepted: true } : {}),
+          }))
+        }>
         {submission && (
           <blockquote className="quote">
             <strong>{task.assignee?.name}:</strong> {submission.note}
@@ -119,6 +204,21 @@ export function ReviewDialog({ task, submission, onClose }: Base & { submission?
             </label>
           ))}
         </fieldset>
+        {scores && (
+          <div className="grid-2">
+            <Field label="Quality score (0–100)" required htmlFor="r-q" error={a.fields.qualityScore}>
+              <Input id="r-q" type="number" min={0} max={100} step={1} value={quality} onChange={(e) => setQuality(e.target.value)} invalid={!!a.fields.qualityScore} />
+            </Field>
+            {task.target == null && (
+              <Field label="Outcome score (0–100)" required htmlFor="r-o" error={a.fields.outcomeScore}>
+                <Input id="r-o" type="number" min={0} max={100} step={1} value={outcome} onChange={(e) => setOutcome(e.target.value)} invalid={!!a.fields.outcomeScore} />
+              </Field>
+            )}
+          </div>
+        )}
+        {scores && task.shortfallReason && (
+          <Checkbox label={`Accept the reason given: “${task.shortfallReason}”`} hint="Not counted against the assignee." checked={accept} onChange={(e) => setAccept(e.target.checked)} />
+        )}
         <Field label="Review comments" required={decision !== 'approved'} htmlFor="r-comment" error={a.fields.comment}>
           <Textarea id="r-comment" rows={3} value={comment} onChange={(e) => setComment(e.target.value)} invalid={!!a.fields.comment} />
         </Field>

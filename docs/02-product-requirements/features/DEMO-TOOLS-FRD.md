@@ -6,6 +6,8 @@
 
 ## DEMO-01 Demo bar and simulated controls
 
+> **Built 2026-11-07 (T-10.1, code-complete).** Server mode keeps only (b) the clock (D-17). `demoToolsAllowed(env)` in `server/src/config.ts` = not production and `DEMO_TOOLS=true` (G-1, G-4). `POST /api/dev/clock` answers 404 **before** the role check when off (G-2), then CoS only (G-5), body `.strict()`, audited `demo_clock` source `demo` (G-6). Client: `features/demo/ServerClockBar.tsx` renders only when `/api/me` has `demo`; controls for the CoS, the bar itself for everyone while the offset is non-zero (G-8). The mock `DemoBar` (act-as, scenarios, expire, reset) stays prototype-only and is absent from the server-mode build (G-3; scanned 2026-11-07). Not done: e2e of TC-DEMO-01-03, G-9 is procedural (never set `DEMO_TOOLS` on pilot/production).
+
 **Description.** A bar at the top of every signed-in page with: (a) act-as user switcher, (b) simulated clock +1 / +4 / +12 / +24 h and "Now", (c) scripted scenarios, (d) expire session, (e) reset demo data. [V-C `features/demo/DemoBar.tsx:13-151`; `services/api/demo.ts`]
 
 **Roles.** Today: **every signed-in user, with no permission check.** [V-C `app/Shell.tsx:126`] Target: development only, CoS only. [PRD DEMO-01; D-17 recommendation]

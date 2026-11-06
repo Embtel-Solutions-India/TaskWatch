@@ -60,7 +60,7 @@ function Guarded({ route }: { route: RouteDef }) {
   useDocumentTitle(route.title);
   if (BACKEND === 'server') {
     if (!route.server) return <NotYetConnected title={route.title} />;
-    if (route.server !== true && !auth.permissions?.includes(route.server)) return <AccessDenied message={`"${route.title}" is not available for your role and scope.`} />;
+    if (route.server !== true && ![route.server].flat().some((p) => auth.permissions?.includes(p))) return <AccessDenied message={`"${route.title}" is not available for your role and scope.`} />;
     return <>{route.element}</>;
   }
   if (route.allow && !route.allow(getDb(), user)) return <AccessDenied message={`"${route.title}" is not available for your role and scope.`} />;

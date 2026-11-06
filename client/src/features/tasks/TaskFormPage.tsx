@@ -16,7 +16,7 @@ export function NewTaskPage() {
   const due = now() + 2 * 24 * HOUR;
   return (
     <TaskForm
-      initial={{ title: '', description: '', instructions: '', category: '', priority: 'normal', assigneeId: '', teamId: null, dueDate: toDateInput(due), dueTime: '17:00', startDate: '', reviewRequired: false, parentId: '', draft: false, files: [] }}
+      initial={{ title: '', description: '', instructions: '', category: '', priority: 'normal', assigneeId: '', teamId: null, dueDate: toDateInput(due), dueTime: '17:00', startDate: '', reviewRequired: false, parentId: '', draft: false, files: [], target: '', unit: '', estimatedHours: '', purpose: '' }}
     />
   );
 }
@@ -31,7 +31,7 @@ export function EditTaskPage() {
   return (
     <TaskForm
       taskId={t.id}
-      initial={{ title: t.title, description: t.description, instructions: t.instructions, category: t.category, priority: t.priority, assigneeId: t.assigneeId, teamId: t.teamId, dueDate: toDateInput(Date.parse(t.dueAt)), dueTime: toTimeInput(Date.parse(t.dueAt)), startDate: t.startAt ? toDateInput(Date.parse(t.startAt)) : '', reviewRequired: t.reviewRequired, parentId: t.parentId ?? '', draft: false, files: [] }}
+      initial={{ title: t.title, description: t.description, instructions: t.instructions, category: t.category, priority: t.priority, assigneeId: t.assigneeId, teamId: t.teamId, dueDate: toDateInput(Date.parse(t.dueAt)), dueTime: toTimeInput(Date.parse(t.dueAt)), startDate: t.startAt ? toDateInput(Date.parse(t.startAt)) : '', reviewRequired: t.reviewRequired, parentId: t.parentId ?? '', draft: false, files: [], target: t.target != null ? String(t.target) : '', unit: t.unit ?? '', estimatedHours: t.estimatedHours != null ? String(t.estimatedHours) : '', purpose: t.purpose ?? '' }}
       currentAssignee={t.assignee}
     />
   );
@@ -63,7 +63,7 @@ function TaskForm({ initial, taskId, currentAssignee }: { initial: TaskInput; ta
     if (taskId) update.run(taskId, input);
     else if (recur.on && !draft) {
       if (!f.assigneeId) return create.run(input); // surfaces field errors
-      rec.run(null, { title: f.title, description: f.description, category: f.category, priority: f.priority, assigneeId: f.assigneeId, teamId: f.teamId || options.find((u) => u.id === f.assigneeId)?.teamId || null, reviewRequired: f.reviewRequired, frequency: recur.frequency, interval: recur.interval, weekdays: recur.weekdays, startDate: f.startDate || f.dueDate, endDate: recur.endDate || null, dueHour: Number(f.dueTime.split(':')[0] ?? 17) });
+      rec.run(null, { title: f.title, description: f.description, category: f.category, priority: f.priority, assigneeId: f.assigneeId, teamId: f.teamId || options.find((u) => u.id === f.assigneeId)?.teamId || null, reviewRequired: f.reviewRequired, frequency: recur.frequency, interval: recur.interval, weekdays: recur.weekdays, startDate: f.startDate || f.dueDate, endDate: recur.endDate || null, dueHour: Number(f.dueTime.split(':')[0] ?? 17), target: f.target ? Number(f.target) : null, unit: f.unit || null, estimatedHours: f.estimatedHours ? Number(f.estimatedHours) : null, purpose: f.purpose || null });
     } else create.run(input);
   };
 
@@ -73,6 +73,12 @@ function TaskForm({ initial, taskId, currentAssignee }: { initial: TaskInput; ta
   const teamName = (id: string | null | undefined) => look.teams.find((t) => t.id === id)?.name;
   const assignee = options.find((o) => o.id === f.assigneeId) ?? currentAssignee;
   const outsideScope = currentAssignee && !options.some((o) => o.id === currentAssignee.id);
+  // D-63: the entity is derived on the server from the chosen team, else the assignee; shown here read-only.
+  const entityId = (f.teamId ? look.teams.find((t) => t.id === f.teamId)?.departmentId : undefined) ?? (() => {
+    const o = options.find((x) => x.id === f.assigneeId);
+    return o?.entityId ?? look.teams.find((t) => t.id === o?.teamId)?.departmentId;
+  })();
+  const entityName = look.entities.find((e) => e.id === entityId)?.name;
 
   return (
     <div className="page narrow">
@@ -126,7 +132,7 @@ function TaskForm({ initial, taskId, currentAssignee }: { initial: TaskInput; ta
                 {outsideScope && <option value={currentAssignee!.id}>{currentAssignee!.name} (current)</option>}
                 {options.map((o) => (
                   <option key={o.id} value={o.id}>
-                    {o.name} — {ROLE_LABEL[o.role]}, {teamName(o.teamId) ?? 'no team'}
+                    {o.name} — {ROLE_LABEL[o.role]}, {teamName(o.teamId) ?? 'no team'}{o.load ? ` · load ${o.load.loadPercent}% (${o.load.band})` : ''}
                   </option>
                 ))}
               </Select>
@@ -141,6 +147,9 @@ function TaskForm({ initial, taskId, currentAssignee }: { initial: TaskInput; ta
                 ))}
               </Select>
             </Field>
+            <Field label="Entity" htmlFor="t-entity" hint="Set automatically from the team, else the assignee.">
+              <Input id="t-entity" value={entityName ?? (taskId ? 'Unchanged' : 'Choose an assignee')} readOnly />
+            </Field>
             <Field label="Priority" required htmlFor="t-prio" hint={`Update required every ${windows[0]} h · L1 at ${windows[1]} h · L2 at ${windows[2]} h · L3 at ${windows[3]} h of silence.`}>
               <Select id="t-prio" value={f.priority} onChange={(e) => set('priority', e.target.value as Priority)}>
                 {PRIORITIES.map((p) => (
@@ -150,6 +159,24 @@ function TaskForm({ initial, taskId, currentAssignee }: { initial: TaskInput; ta
                 ))}
               </Select>
             </Field>
+            <div className="grid-2">
+              <Field label="Target" htmlFor="t-target" error={fields.target} hint="Optional: how many, e.g. 150.">
+                <Input id="t-target" type="number" min={0} step="any" value={f.target} onChange={(e) => set('target', e.target.value)} invalid={!!fields.target} />
+              </Field>
+              <Field label="Unit" htmlFor="t-unit" error={fields.unit} hint="e.g. emails, posts, leads.">
+                <Input id="t-unit" maxLength={40} value={f.unit} onChange={(e) => set('unit', e.target.value)} invalid={!!fields.unit} />
+              </Field>
+              <Field label="Estimated hours" required htmlFor="t-est" error={fields.estimatedHours} hint="Expected effort; used for workload.">
+                <Input id="t-est" type="number" min={0.25} max={200} step={0.25} value={f.estimatedHours} onChange={(e) => set('estimatedHours', e.target.value)} invalid={!!fields.estimatedHours} />
+              </Field>
+              <Field label="Purpose" required htmlFor="t-purpose" error={fields.purpose}>
+                <Select id="t-purpose" value={f.purpose} onChange={(e) => set('purpose', e.target.value as TaskInput['purpose'])} invalid={!!fields.purpose}>
+                  <option value="">Choose…</option>
+                  <option value="revenue">Revenue-oriented</option>
+                  <option value="support">Support</option>
+                </Select>
+              </Field>
+            </div>
             <div className="grid-2">
               <Field label="Due date" required htmlFor="t-due" error={fields.dueDate}>
                 <Input id="t-due" type="date" value={f.dueDate} onChange={(e) => set('dueDate', e.target.value)} invalid={!!fields.dueDate} />

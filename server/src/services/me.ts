@@ -1,3 +1,4 @@
+import { WHATSAPP_ENABLED } from '@taskwatch/shared/notifications';
 // GET /api/me bootstrap (T-1.15, AUTH-06; API_CONTRACTS): everything the client needs on load, scoped to the caller.
 import type { Permission } from '@taskwatch/shared/permissions';
 import * as clock from '../clock.js';
@@ -58,6 +59,8 @@ export async function bootstrap(user: DirUser, dir: Directory) {
       timezone: user.timeZone,
       zone: zoneLabel(user.timeZone),
       manager: manager ? { id: manager.id, name: manager.name } : null,
+      /** People below this person in the reporting line (the client's "supervises" route gate). */
+      reportCount: dir.descendants(user.id).size,
     },
     organization, // ADR-0010: no picker; one organization per user (D-96)
     permissions,
@@ -71,7 +74,7 @@ export async function bootstrap(user: DirUser, dir: Directory) {
     },
     rules: ruleSet.for(user.entityId),
     badges: await badges(user, dir, permissions),
-    integrations: { google: config.google.enabled, whatsapp: config.whatsapp.enabled, email: config.smtp.enabled, devLogin: config.devLogin },
+    integrations: { google: config.google.enabled, whatsapp: WHATSAPP_ENABLED && config.whatsapp.enabled, email: config.smtp.enabled, devLogin: config.devLogin },
     demo: config.demoTools ? { offsetHours: Math.round((clock.getOffsetMs() / 3_600_000) * 100) / 100 } : null,
     serverTime: clock.now(),
   };
