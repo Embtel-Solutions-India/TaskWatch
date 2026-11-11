@@ -57,21 +57,12 @@ Other production behaviour already in code:
 ## 4. Not in scope
 StatCommand module delivery (WO-D1 decided standalone, D-22); phase 2 GoHighLevel webhook, ImmigrationCRM link and mobile app. [WO]
 
-## First production start: bootstrap (owner, 2026-11-11)
+## First production start (owner, 2026-11-11)
 
-An empty production database gets the organization, its settings and its verticals, plus the first Chief of Staff, with `npm run db:bootstrap` (`server/src/db/bootstrap.ts`). It loads **no** demo people or tasks, and it refuses to run once the database has anyone. `db:setup` and `db:seed` refuse to load the demo company when `NODE_ENV=production`.
+Production is seeded by hand with one SQL transaction: organization 1's name and settings, the verticals, and the first Chief of Staff (`users`) with a scrypt password hash in `user_credentials` (never in `users`). Run `npm run db:migrate` with the production `DATABASE_URL` first (`npm start` also migrates). `db:setup` and `db:seed` refuse to load the demo company when `NODE_ENV=production`.
 
-- **What it creates:** organization "Embtel Web Solutions"; settings (timezone America/New_York, workday 09:00–18:00, 8 categories, digest Monday 10:00, priority weights Critical 1 · High 3 · Normal 2 · Low 1, the 82 default standard task times); verticals FO, BAIS, USAIS, IE, EMBTEL, BAAS; one Chief of Staff in FO. To change these, edit `ORGANIZATION` in `bootstrap.ts` before the first run, or later in the app.
-- **The CoS sign-in comes from the environment only, never from the repository.** Set it in the shell for that one command; do not put it in `production.env`:
-
-  PowerShell:
-  ```
-  $env:BOOTSTRAP_COS_EMAIL = 'cos@…'; $env:BOOTSTRAP_COS_PASSWORD = '…'; npm run db:bootstrap; Remove-Item Env:BOOTSTRAP_COS_PASSWORD
-  ```
-  bash:
-  ```
-  BOOTSTRAP_COS_EMAIL='cos@…' BOOTSTRAP_COS_PASSWORD='…' npm run db:bootstrap
-  ```
-  Optional: `BOOTSTRAP_COS_NAME` (default "Chief of Staff"). The password follows the app's rule (10+ characters, letters and a number).
-- **Order:** set `server/production.env` (`NODE_ENV=production`, `APP_URL`, `DATABASE_URL`, `SESSION_SECRET`, `UPLOAD_DIR`, SMTP for live email) → `npm run db:bootstrap` (applies migrations too) → `npm start`.
-- **The CoS then sets up:** Settings (check the priority weights), Verticals (general managers, departments and leads), Staff (add people, then "Reset access" each, D-126), and roles or the escalation policy if needed. The CoS should change the bootstrap password after the first sign-in (Account → password, or "Forgot password").
+- **The hash** must be in the app's format, `scrypt$131072$8$1$<salt>$<hash>`: produce it with `hashPassword` (`server/src/services/auth.ts`). Never keep the password or the hash in the repository.
+- **Run the SQL from a file or the psql prompt**: the hash contains `$`, which a shell would expand inside `-c "…"`.
+- **No audit entry** is written for the hand seed: the admin log is hash-chained and refuses direct inserts.
+- **Order:** set `server/production.env` / the environment (`NODE_ENV=production`, `APP_URL`, `DATABASE_URL`, `SESSION_SECRET`, `UPLOAD_DIR`, SMTP for live email; see `.env.example`) → `npm run db:migrate` → the seed SQL → `npm start`.
+- **The CoS then sets up:** Settings (check the priority weights), Verticals (general managers, departments and leads), Staff (add people, then "Reset access" each, D-126), and roles or the escalation policy if needed. The CoS should change the seeded password after the first sign-in.

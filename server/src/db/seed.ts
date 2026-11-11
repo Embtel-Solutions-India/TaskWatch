@@ -477,7 +477,7 @@ async function reset(): Promise<void> {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const wantsReset = process.argv.includes('--reset');
   (async () => {
-    if (config.isProd) throw new Error('Refusing to load demo data into production. Use `npm run db:bootstrap`.');
+    if (config.isProd) throw new Error('Refusing to load demo data into production. Seed production by hand (docs/08-operations/DEPLOYMENT.md).');
     if (wantsReset) await reset();
     else await migrate();
     const { rows } = await pool.query('select count(*) as n from users');

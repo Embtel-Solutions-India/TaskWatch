@@ -34,6 +34,7 @@ function AuthFrame({
   useDocumentTitle(title);
   return (
     <div className="auth">
+      <AuthWaves />
       <div className="auth-theme">
         <ThemeButton />
       </div>
@@ -88,6 +89,34 @@ function CredentialFields({ email, setEmail, password, setPassword, err, busy }:
         Sign in <Icon name="arrow" size={16} />
       </Button>
     </>
+  );
+}
+
+/**
+ * Owner 2026-11-11: soft layered waves in the bottom-left and top-right corners of the sign-in pages. Inline SVG: crisp
+ * at any size, and the colours come from CSS variables, so they follow the theme. Decoration only (hidden from AT).
+ */
+function AuthWaves() {
+  const waves = (id: string, className: string) => (
+    <svg className={className} viewBox="0 0 640 420" preserveAspectRatio="xMinYMax meet" focusable="false">
+      <defs>
+        {[1, 2, 3].map((n) => (
+          <linearGradient key={n} id={`${id}-${n}`} x1="0" y1="1" x2="1" y2="0">
+            <stop offset="0" style={{ stopColor: `var(--wave-${n}a)` }} />
+            <stop offset="1" style={{ stopColor: `var(--wave-${n}b)` }} />
+          </linearGradient>
+        ))}
+      </defs>
+      <path d="M0 420V150c96-26 178 18 262 86 84 68 172 124 298 184z" fill={`url(#${id}-1)`} />
+      <path d="M0 420V238c84-18 156 14 226 64 70 50 140 90 236 118z" fill={`url(#${id}-2)`} />
+      <path d="M0 420V318c62-10 120 10 178 42 46 26 96 46 156 60z" fill={`url(#${id}-3)`} />
+    </svg>
+  );
+  return (
+    <div className="auth-waves" aria-hidden>
+      {waves('wave-bl', 'auth-waves-bl')}
+      {waves('wave-tr', 'auth-waves-tr')}
+    </div>
   );
 }
 

@@ -4626,16 +4626,67 @@ button.barlist-row {
   display: block;
 }
 /* Sign-in page (owner 2026-11-11): plain white page in light theme, black in dark; the form in a glowing deep-blue card. */
+/* A low gradient (white → palest blue, black → deepest navy) and corner waves in matching tints (owner 2026-11-11). */
 .auth {
-  background: #ffffff;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(160deg, #ffffff 0%, #f7faff 55%, #eef4ff 100%);
+  --wave-1a: #e6f0ff;
+  --wave-1b: #f6f9ff;
+  --wave-2a: #d3e4ff;
+  --wave-2b: #edf4ff;
+  --wave-3a: #bcd6ff;
+  --wave-3b: #e1edff;
 }
 :root[data-theme='dark'] .auth {
-  background: #000000;
+  background: linear-gradient(160deg, #000000 0%, #02060f 55%, #050e22 100%);
+  --wave-1a: #071531;
+  --wave-1b: #030a19;
+  --wave-2a: #0a1d42;
+  --wave-2b: #050f25;
+  --wave-3a: #0e2757;
+  --wave-3b: #071633;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) .auth {
-    background: #000000;
+    background: linear-gradient(160deg, #000000 0%, #02060f 55%, #050e22 100%);
+    --wave-1a: #071531;
+    --wave-1b: #030a19;
+    --wave-2a: #0a1d42;
+    --wave-2b: #050f25;
+    --wave-3a: #0e2757;
+    --wave-3b: #071633;
   }
+}
+.auth-waves {
+  /* Pinned to the screen, so both corners show even when a long form scrolls. */
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.auth-waves svg {
+  position: absolute;
+  width: min(46vw, 620px);
+  height: auto;
+}
+.auth-waves-bl {
+  left: 0;
+  bottom: 0;
+}
+/* The same shapes, turned to sit in the top-right corner behind the illustration. */
+.auth-waves-tr {
+  right: 0;
+  top: 0;
+  transform: rotate(180deg);
+}
+/* Content stays above the waves. */
+.auth-panel {
+  position: relative;
+  z-index: 1;
+}
+.auth-art {
+  z-index: 1;
 }
 .auth-card {
   display: flex;
