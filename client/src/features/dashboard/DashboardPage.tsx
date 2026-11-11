@@ -6,7 +6,7 @@ import { LEVEL_LABEL, PRIORITY_LABEL, ROLE_LABEL, STATUS_LABEL } from '../../con
 import { BarList, ColumnChart, Donut, LineChart, ProgressRing } from '../../components/charts';
 import { Icon } from '../../components/icons';
 import { Avatar, Card, ErrorState, InfoTip, Segmented, Select, Skeleton, Stat, Tag } from '../../components/ui';
-import { useApi, useLocalState, useMe } from '../../hooks';
+import { useApi, useLocalState, useMasonry, useMe } from '../../hooks';
 import { getDashboard } from '../../services/api/misc';
 import { PRIORITIES } from '../../types';
 import { cx, formatShort, pct, relative } from '../../utils/format';
@@ -24,6 +24,7 @@ export function DashboardPage() {
   const [range, setRange] = useLocalState<Range>('dash.range', 30);
   const [entity, setEntity] = useState('');
   const q = useApi(['dashboard', user.id, range, entity], () => getDashboard(range, entity));
+  const masonry = useMasonry();
   if (q.error) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
   if (!q.data) return <div className="page"><Skeleton rows={12} /></div>;
   const d = q.data;
@@ -45,8 +46,8 @@ export function DashboardPage() {
         </div>
         <div className="dash-controls">
           {d.entityOptions.length > 0 && (
-            <Select aria-label="Entity" value={entity} onChange={(e) => setEntity(e.target.value)} className="w-auto">
-              <option value="">All entities</option>
+            <Select aria-label="Vertical" value={entity} onChange={(e) => setEntity(e.target.value)} className="w-auto">
+              <option value="">All verticals</option>
               {d.entityOptions.map((x) => (
                 <option key={x.id} value={x.id}>
                   {x.name}
@@ -62,10 +63,13 @@ export function DashboardPage() {
           )}
         </div>
       </header>
-      {d.layout === 'staff' && <StaffDash d={d} range={range} />}
-      {d.layout === 'lead' && <LeadDash d={d} range={range} />}
-      {d.layout === 'manager' && <ManagerDash d={d} range={range} />}
-      {d.layout === 'executive' && <CosDash d={d} range={range} />}
+      {/* One masonry grid: every card is placed on its own, so short cards leave no holes (owner request 2026-11-10). */}
+      <div className="dash-masonry" ref={masonry}>
+        {d.layout === 'staff' && <StaffDash d={d} range={range} />}
+        {d.layout === 'lead' && <LeadDash d={d} range={range} />}
+        {d.layout === 'manager' && <ManagerDash d={d} range={range} />}
+        {d.layout === 'executive' && <CosDash d={d} range={range} />}
+      </div>
     </div>
   );
 }
@@ -77,7 +81,7 @@ function MyPerformance({ me }: { me: DashboardPayload['me'] }) {
   if (!me) return null;
   return (
     <div className="stats">
-      <Stat label="My score this month" value={me.score.score === null ? '—' : Math.round(me.score.score)} hint={me.score.ranked ? undefined : 'not enough rated tasks yet'} to={`/performance/people/${user.id}`} help="Outcome, timeliness and quality of your tasks due this month, as on the Performance page." />
+      <Stat label="My score this month" value={me.score.score === null ? '—' : Math.round(me.score.score)} hint={me.score.ranked ? undefined : 'not enough rated tasks yet'} to={`/performance/people/${user.id}`} help="Your Outcome Score for tasks due this month (achieved against target, weighted by priority), as on the Performance page." />
       <Stat label="Progress of open measured tasks" value={me.openProgress === null ? '—' : `${me.openProgress}%`} hint={`${me.measuredOpen} task(s) with a target`} />
       <Stat label="My load" value={`${me.loadPercent}%`} tone={me.band === 'overloaded' ? 'danger' : undefined} hint={me.band} help="Estimated hours of your open work over the next 5 working days, against your working hours." />
     </div>
@@ -317,7 +321,7 @@ function CosDash({ d, range }: { d: Of<'executive'>; range: Range }) {
       </div>
       <div className="dash-grid">
         <FunnelCard data={d.funnel} range={range} title="Escalation pyramid" />
-        <Card title="Entity workload" sub="Active tasks per entity; click to drill into teams">
+        <Card title="Vertical workload" sub="Active tasks per vertical; click to drill into departments">
           <ColumnChart
             categories={d.entities.map((r) => r.name)}
             series={[
@@ -325,7 +329,7 @@ function CosDash({ d, range }: { d: Of<'executive'>; range: Range }) {
               { name: 'Escalated', values: d.entities.map((r) => Math.max(0, r.escalated - r.overdue)), tone: 'series-warn' },
               { name: 'Overdue', values: d.entities.map((r) => r.overdue), tone: 'series-danger' },
             ]}
-            label="Entity workload"
+            label="Vertical workload"
             stacked
             height={170}
           />

@@ -2,6 +2,26 @@
 
 Each session appends its entry at the top. Write facts only, and link to documents instead of restating them.
 
+## 2026-11-07 (commit + whole-codebase review; highs fixed)
+- Owner: "commit and review the whole code base", then "fix highs". Committed `7ad7d98` on new branch `phases-8-10` (not pushed; `server/smoke-reports.mts` left out). The H1–H5 fixes are **uncommitted** on top.
+- Fixed KI-51…55 (see KNOWN_ISSUES). Open review findings: KI-56; owner said "then we will see". Open question for the owner: one meaning of on-time for D-50 (completion vs submission).
+- Postgres: service start type was switched to Manual on 2026-11-06 23:59 and it was stopped at 00:52, so it does not start with Windows. Start it as admin (`net start postgresql-x64-18`, or `sc.exe config postgresql-x64-18 start= auto` to restore autostart).
+- **2026-11-10:** Postgres running (auto-start). Two stale tests fixed (CHANGELOG); owner `npm test`, `npm run e2e` and the reports smoke all green; H4 browser check **passed**; tracker swept (93 DONE).
+- **2026-11-10 later:** every board refreshes every 60 s while visible and on tab focus (`App.tsx`), browser-verified.
+- **2026-11-10 later:** e2e green; org page redesigned as a top-down chart (CHANGELOG). Owner to approve deleting the unused `.org-tree`/`.org-card` CSS, and to decide whether the CEO should count as "No manager" (shared rule in OrgPage, StaffPages, misc.ts).
+- **2026-11-10 latest:** KI-57 shell offset fixed for all users; dashboards are masonry (no row gaps). Not re-run after these: `npm run e2e`.
+- **2026-11-11:** D-124 leaderboard = weighted Outcome Score (Settings priority weights); owner to run `npm test` (2 new API tests) and answer D-125 (over-average-time reason).
+- **2026-11-11 later:** D-125 built (standard task times, recommended estimate, working-time over-run reason, reviewer view). Owner to run `npm test`; some older API tests may need a reason where a 1 h-estimate task now runs over. Offered: welcome / set-password email on person creation (not built).
+- **2026-11-11 last:** D-126/127/128 done (no welcome email; CEO not flagged; leaderboard visuals + analytics endpoint); old org CSS and smoke file deleted. Owner: `npm test`. Charts are unproven with real data: dev has no scored tasks.
+- **2026-11-11:** sign-in page redesigned from the owner mockup (illustration panel, icon inputs, password toggle). Unused `.ladder` CSS awaits a delete decision.
+- **2026-11-11 tests:** `npm test` 254/254 green after the test-setup fixes. Next: owner `npm run e2e`, then PERF-04/05 → DONE.
+- **2026-11-11 final:** `npm test` 254/254 + e2e 3/3 green; PERF-04/05 DONE (93/98). Nothing committed. Left: DEMO-01 browser check, optional sample scored data for the charts.
+- **2026-11-11 (ADR-0011):** verticals and departments plus automatic reporting lines are built; `npm test` 260/260 and e2e 3/3 green. Owner: browser check of /admin/verticals, then the CoS sets each vertical's general manager and renames the lead-named teams on /admin/verticals (D-132). Until a GM is set, a vertical's lines change only when someone in it is edited, and then they fall back to the CoS.
+- **2026-11-11 (D-133):** the task giver can reassign their task and delete drafts (hidden, never deleted); Edit / Reassign / Delete are buttons and row-menu items. Owner: `npm test`.
+- **2026-11-11 final:** `npm test` 264/264 green; committed and pushed on `phases-8-10` at the owner's request. `npm run e2e` was last green before sign-in v2 and D-133 (re-run recommended). Go-live: DEPLOYMENT.md "First production start".
+- **Resume here:** delete `server/smoke-reports.mts` (owner approval) → DEMO-01 browser check (`DEMO_TOOLS=true`, CoS + non-CoS) → commit the H1–H5 fixes if the owner asks → owner picks from KI-56.
+- Verified 2026-11-10: `npm run typecheck` 0; owner `npm test`, `npm run e2e` and the reports smoke all green (incl. the `Review fixes 2026-11-07` tests); H4 browser check passed.
+
 ## 2026-11-07 (Phase 9 check; Phase 10 Demo: T-10.1, code-complete)
 - Owner: "check phase 9 and then 10". **Phase 9 still code-complete, not DONE:** PostgreSQL service `postgresql-x64-18` is stopped and `net start` needs admin (access denied), so `npm test`, e2e and `server/smoke-reports.mts` remain unrun.
 - Phase 10 built: see the DEMO-TOOLS-FRD built note. Server: `demoToolsAllowed` (config), `/dev/clock` 404 before the role check, `.strict()` body. Client: `ServerClockBar` (clock only; CoS controls; offset bar for all).

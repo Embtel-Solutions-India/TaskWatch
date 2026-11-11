@@ -8,6 +8,7 @@ import { createStaff, getOrg, getRoles, getStaffProfile, listStaff, resetAccess,
 import { primaryRole } from '../../services/api/adminServer';
 import { BACKEND } from '../../services/http';
 import { WHATSAPP_ENABLED } from '@taskwatch/shared/notifications';
+import { needsManager } from '@taskwatch/shared/permissions';
 import { wouldCreateLoop } from '../../services/authz/permissions';
 import type { Role, User } from '../../types';
 import { PERMISSIONS, ROLES } from '../../types';
@@ -36,7 +37,7 @@ export function StaffDirectoryPage() {
     () =>
       (q.data ?? []).filter((u) => {
         const s = query.toLowerCase();
-        return (!s || u.name.toLowerCase().includes(s) || u.email.includes(s) || u.title.toLowerCase().includes(s)) && (!role || u.roles.includes(role as Role)) && (!team || (team === 'none' ? !u.teamId : u.teamId === team)) && (!status || u.status === status || (status === 'nomanager' && !u.managerId && u.role !== 'cos'));
+        return (!s || u.name.toLowerCase().includes(s) || u.email.includes(s) || u.title.toLowerCase().includes(s)) && (!role || u.roles.includes(role as Role)) && (!team || (team === 'none' ? !u.teamId : u.teamId === team)) && (!status || u.status === status || (status === 'nomanager' && needsManager(u)));
       }),
     [q.data, query, role, team, status],
   );
@@ -62,7 +63,7 @@ export function StaffDirectoryPage() {
         <Stat label="Total staff" value={all.length} />
         <Stat label="Active" value={all.filter((u) => u.status === 'active').length} />
         <Stat label="Inactive" value={all.filter((u) => u.status === 'inactive').length} />
-        <Stat label="Without a manager" value={all.filter((u) => !u.managerId && u.role !== 'cos').length} tone={all.some((u) => !u.managerId && u.role !== 'cos') ? 'warn' : undefined} help="Escalations for their reports skip straight to the next existing level." />
+        <Stat label="Without a manager" value={all.filter(needsManager).length} tone={all.some(needsManager) ? 'warn' : undefined} help="Escalations for their reports skip straight to the next existing level." />
       </div>
       <DataTable<StaffRow>
         caption="Staff directory"
@@ -85,7 +86,7 @@ export function StaffDirectoryPage() {
                 </option>
               ))}
             </Select>
-            <Select aria-label="Team" value={team} onChange={(e) => setTeam(e.target.value)}>
+            <Select aria-label="Department" value={team} onChange={(e) => setTeam(e.target.value)}>
               <option value="">Any team</option>
               <option value="none">No team</option>
               {(org.data?.teams ?? []).map((t) => (
@@ -223,9 +224,9 @@ function StaffForm({ row, org, onClose }: { row: User | null; org: OrgData; onCl
                 ))}
               </div>
             </Field>
-            <Field label="Entity" required htmlFor="sf-entity" error={fields.entityId}>
+            <Field label="Vertical" required htmlFor="sf-entity" error={fields.entityId}>
               <Select id="sf-entity" value={f.entityId} onChange={(e) => setF((x) => ({ ...x, entityId: e.target.value, teamId: null }))} invalid={!!fields.entityId}>
-                <option value="">Choose an entity</option>
+                <option value="">Choose a vertical</option>
                 {org.departments.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.name}
@@ -233,6 +234,11 @@ function StaffForm({ row, org, onClose }: { row: User | null; org: OrgData; onCl
                 ))}
               </Select>
             </Field>
+            {BACKEND === 'server' ? (
+              <Field label="Reports to" htmlFor="sf-mgr" hint="Set automatically: the department lead, else the vertical's general manager, else the Chief of Staff.">
+                <Input id="sf-mgr" value={row?.managerId ? (org.users.find((u) => u.id === row.managerId)?.name ?? '—') : 'Placed when saved'} readOnly />
+              </Field>
+            ) : (
             <Field label="Manager" htmlFor="sf-mgr" error={fields.managerId} hint="Only people senior to this role. Loops are prevented.">
               <Select id="sf-mgr" value={f.managerId ?? ''} onChange={(e) => set('managerId', e.target.value || null)} invalid={!!fields.managerId}>
                 <option value="">No manager</option>
@@ -243,7 +249,8 @@ function StaffForm({ row, org, onClose }: { row: User | null; org: OrgData; onCl
                 ))}
               </Select>
             </Field>
-            <Field label="Team" htmlFor="sf-team" error={fields.teamId}>
+            )}
+            <Field label="Department" htmlFor="sf-team" error={fields.teamId}>
               <Select id="sf-team" value={f.teamId ?? ''} onChange={(e) => set('teamId', e.target.value || null)} invalid={!!fields.teamId}>
                 <option value="">No team</option>
                 {teams.map((t) => (

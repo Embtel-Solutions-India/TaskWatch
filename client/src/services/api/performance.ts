@@ -8,10 +8,12 @@ export interface PeriodParams {
   from?: string;
   to?: string;
 }
+/** D-124: each task's weight in the Outcome Score, by priority (Settings). */
 export interface Weights {
-  outcome: number;
-  timeliness: number;
-  quality: number;
+  critical: number;
+  high: number;
+  normal: number;
+  low: number;
 }
 export interface ScoreParts {
   outcome: number | null;
@@ -39,6 +41,7 @@ export interface BreakdownTask {
   quality: number | null;
   reviewed: boolean;
   reworkCount: number;
+  weight: number;
   excluded: null | 'not_due' | 'accepted' | 'not_rated' | 'reassigned_after_due' | 'pending_review';
 }
 export interface WorkloadRow {
@@ -69,6 +72,12 @@ export const leaderboard = (teamId: number, p: PeriodParams) =>
   get<{ team: { id: number; name: string }; from: string; to: string; weights: Weights; rows: LeaderRow[] }>(`/performance/leaderboard?teamId=${teamId}&${qs(p)}`);
 export const personBreakdown = (id: string, p: PeriodParams) =>
   get<{ person: { id: number; name: string; teamId: number | null }; from: string; to: string; weights: Weights; score: ScoreParts; tasks: BreakdownTask[] }>(`/performance/people/${id}?${qs(p)}`);
+/** The leaderboard's charts: the team's weekly average (8 weeks) and, for viewers with several teams, each team's average. */
+export interface Analytics {
+  trend: { from: string; to: string; average: number | null; scored: number }[];
+  teams: { id: number; name: string; people: number; average: number | null; scored: number }[];
+}
+export const perfAnalytics = (teamId: number, p: PeriodParams) => get<Analytics>(`/performance/analytics?teamId=${teamId}&${qs(p)}`);
 export const teamWorkload = (teamId: number) => get<{ team: { id: number; name: string }; rows: WorkloadRow[] }>(`/workload?teamId=${teamId}`);
 
 /** Scores show one decimal (FRD §5); a missing part shows a dash. */

@@ -9,6 +9,8 @@ const sqlList = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(', ');
 /** Work still on someone's plate: neither closed nor a draft (lists, counts, dashboards). */
 export const isOpenStatus = (s: string): boolean => s !== 'draft' && !(CLOSED_STATUSES as readonly string[]).includes(s);
 export const openSql = (alias = 't') => `${alias}.status not in (${sqlList([...CLOSED_STATUSES, 'draft'])})`;
+/** Active statuses (assigned, in progress, blocked, changes requested, reopened): what can be overdue (H3). */
+export const activeSql = (alias = 't') => `${alias}.status in (${sqlList(ACTIVE_STATUSES)})`;
 /** Statuses the escalation engine evaluates (shared LADDER_STATUSES: active, Blocked, and In review for the past-due floor). */
 export const ladderSql = (alias = 't') => `${alias}.status in (${sqlList(LADDER_STATUSES)})`;
 

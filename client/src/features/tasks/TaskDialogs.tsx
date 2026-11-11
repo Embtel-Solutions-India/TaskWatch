@@ -4,7 +4,7 @@ import { Banner, Button, Checkbox, Dialog, Field, FilePicker, Input, Select, Tex
 import { useAction, useApi } from '../../hooks';
 import { BACKEND } from '../../services/http';
 import type { TaskView } from '../../services/api/base';
-import { ackEscalation, assigneeOptions, cancelTask, completeTask, decideExtension, postProgress, rateTask, reassignTask, reopenTask, requestExtension, reviewTask, submitForReview, type FinishReport } from '../../services/api/tasks';
+import { ackEscalation, assigneeOptions, cancelTask, discardTask, completeTask, decideExtension, postProgress, rateTask, reassignTask, reopenTask, requestExtension, reviewTask, submitForReview, type FinishReport } from '../../services/api/tasks';
 import { getDb, now } from '../../services/mock/store';
 import type { Extension, Review } from '../../types';
 
@@ -13,7 +13,7 @@ const personOn = (task: TaskView, id: string | null) =>
   BACKEND === 'server' ? [task.assignee, task.giver].find((u) => u?.id === id)?.name : getDb().users.find((u) => u.id === id)?.name;
 import { formatDateTime, toDateInput, toTimeInput } from '../../utils/format';
 
-export type DialogKind = 'progress' | 'submit' | 'complete' | 'review' | 'extension' | 'decide' | 'reassign' | 'cancel' | 'reopen' | 'ack_escalation' | 'rate' | null;
+export type DialogKind = 'progress' | 'submit' | 'complete' | 'review' | 'extension' | 'decide' | 'reassign' | 'cancel' | 'discard' | 'reopen' | 'ack_escalation' | 'rate' | null;
 
 interface Base {
   task: TaskView;
@@ -51,7 +51,7 @@ function useFinish(task: TaskView) {
         <Field label="Result" htmlFor="f-res" hint="What came of it, e.g. 6 replies, 2 consultations booked." error={errors.result}>
           <Textarea id="f-res" rows={2} maxLength={1000} value={result} onChange={(e) => setResult(e.target.value)} />
         </Field>
-        <Field label="Reason for a shortfall or delay" htmlFor="f-why" hint="Required when short of the target or past the due date." error={errors.shortfallReason}>
+        <Field label="Reason for a shortfall or delay" htmlFor="f-why" hint="Required when short of the target, past the due date, or over the standard working time. Also posted to the task's comments." error={errors.shortfallReason}>
           <Textarea id="f-why" rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} invalid={!!errors.shortfallReason} />
         </Field>
       </>
@@ -360,6 +360,18 @@ export function CancelDialog({ task, onClose }: Base) {
         <Field label="Reason" required htmlFor="cx-reason" error={a.fields.reason}>
           <Textarea id="cx-reason" rows={3} autoFocus value={reason} onChange={(e) => setReason(e.target.value)} invalid={!!a.fields.reason} />
         </Field>
+      </form>
+    </Dialog>
+  );
+}
+
+/** D-133: deleting a draft nobody was given. Assigned tasks are cancelled instead. */
+export function DiscardDialog({ task, onClose, onDone }: Base & { onDone?: () => void }) {
+  const a = useAction(discardTask, { success: `Draft ${task.id} deleted`, onSuccess: () => (onClose(), onDone?.()) });
+  return (
+    <Dialog open onClose={onClose} size="sm" title={`Delete draft ${task.id}?`} footer={<Foot onClose={onClose} label="Delete draft" danger pending={a.pending} form="f-discard" />}>
+      <form id="f-discard" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id))}>
+        <p>“{task.title}” was never assigned, so it disappears from every list for everyone. The audit trail keeps a record that it was deleted.</p>
       </form>
     </Dialog>
   );

@@ -124,6 +124,8 @@ Buckets: 7 (range 7), **6** (range 30), 13 (range 90). Per bucket: escalation ev
 
 **Description.** The `/` Overview page: a role-specific command centre. [V-C `DashboardPage.tsx:26-77`]
 
+**Card placement (2026-11-10, owner request).** All cards of a layout sit in one masonry grid: same order, no row holes, wide card of a pair 2/3, others 1/3 (`useMasonry`, `.dash-masonry`).
+
 **Roles.** Every signed-in user. Layout by role: `staff` → Staff, `lead` → Lead, `manager` → Manager, `cos`/`ceo` → CoS. [V-C `DashboardPage.tsx:71-74`] With several roles per user (D-8) the **highest-ranked** role picks the layout (rank: staff 0, lead 1, manager 2, cos 3, ceo 4). [V-C `constants/index.ts:14`; A]
 
 **User actions (UI).**

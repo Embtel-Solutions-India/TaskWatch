@@ -69,3 +69,22 @@ describe('shared workflow', () => {
     assert.ok(!allowedActions(task('completed'), facts({ isGiver: true })).has('rate'), 'nothing to rate');
   });
 });
+
+describe('D-133: task giver actions', () => {
+  const giver = (perms: ActionPermission[] = ['assign_tasks', 'create_tasks']) => facts({ isGiver: true, perms });
+
+  it('the giver reassigns their own task without being above the assignee; not a draft, not a closed task', () => {
+    assert.ok(allowedActions(task('in_progress'), giver()).has('reassign'));
+    assert.ok(!allowedActions(task('in_progress'), giver(['create_tasks'])).has('reassign'), 'needs assign_tasks');
+    assert.ok(!allowedActions(task('draft'), giver()).has('reassign'), 'a draft is published, not reassigned');
+    assert.ok(!allowedActions(task('completed'), giver()).has('reassign'));
+    assert.ok(!allowedActions(task('in_progress'), facts({ isGiver: true, isCurrentGiver: false, perms: ['assign_tasks', 'create_tasks'] })).has('reassign'), 'the creator, after a reassignment by someone else');
+  });
+
+  it('only the giver discards, and only a draft', () => {
+    assert.ok(allowedActions(task('draft'), giver()).has('discard'));
+    for (const s of ['assigned', 'in_progress', 'cancelled'] as const) assert.ok(!allowedActions(task(s), giver()).has('discard'), s);
+    assert.ok(!allowedActions(task('draft'), facts({ isOverseer: true })).has('discard'), 'an overseer is not the giver');
+    assert.ok(!allowedActions(task('draft'), giver(['assign_tasks'])).has('discard'), 'needs create_tasks');
+  });
+});

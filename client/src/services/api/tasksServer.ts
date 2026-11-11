@@ -181,6 +181,7 @@ function detail(d: any): TaskDetail {
   });
   return {
     task: toView(d.task),
+    time: d.time ?? null,
     activities: d.activities
       .map((a: any): Activity => ({ id: String(a.id), taskId, type: activityType(a.kind), actorId: S(a.actorId), at: a.at, text: activityText(a) }))
       .reverse(),
@@ -266,6 +267,7 @@ export const tasksServer = {
   decideExtension: async (extId: string, i: { approve: boolean; note: string }) => void (await http('POST', `/extensions/${extId}/decision`, i)),
   reassign: (id: string, i: { toId: string; reason: string }) => act(id, 'reassign', { toId: N(i.toId) ?? undefined, reason: i.reason }),
   cancel: (id: string, reason: string) => act(id, 'cancel', { reason }),
+  discard: async (id: string): Promise<void> => void (await http('POST', `/tasks/${id}/discard`, {})), // D-133: 204
   reopen: (id: string, i: { reason: string; dueDate: string }) => act(id, 'reopen', i),
   /** ESC-06/06a: one event (D-26: that level only), with the WO FR-9 note. */
   ackEscalation: async (eventId: string | undefined, note: string): Promise<void> => {
@@ -309,12 +311,13 @@ export const tasksServer = {
   assigneeOptions: async (): Promise<(User & { entityId?: string; load?: { loadPercent: number; band: string } })[]> =>
     (await http<any[]>('GET', '/tasks/options/assignees')).map((u) => ({ ...userStub(u), entityId: u.entityId as string, load: u.load, teamId: S(u.teamId), timezone: u.timeZone ?? '', openCount: u.openCount, teamName: u.teamName ?? null })),
   formLookups: async () => {
-    const [me, org] = await Promise.all([http<any>('GET', '/me'), http<any>('GET', '/org')]);
+    const [me, org, settings] = await Promise.all([http<any>('GET', '/me'), http<any>('GET', '/org'), http<any>('GET', '/settings')]);
     return {
       categories: me.settings.categories as string[],
       rules: me.rules,
       teams: (org.teams as any[]).map((t) => ({ id: String(t.id), name: t.name, departmentId: t.entityId as string })),
       entities: (org.entities as any[]).map((e) => ({ id: e.id as string, name: e.name as string })),
+      standardTasks: settings.standardTasks ?? [],
     };
   },
   parentOptions: async () => (await http<any[]>('GET', '/tasks/options/parents')).map((t) => ({ id: String(t.id), title: t.title })),

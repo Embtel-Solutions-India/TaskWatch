@@ -505,12 +505,19 @@ ul.tight {
 }
 
 /* ---------------- Layout ---------------- */
+/* The sticky sidebar and topbar sit below the dev/demo bar only when it is on the page (CoS or a moved clock). */
+.app {
+  --bar-h: 0px;
+}
+.app:has(> .demobar) {
+  --bar-h: 36px;
+}
 .layout {
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
   gap: 14px;
   padding: 14px;
-  min-height: calc(100vh - 36px);
+  min-height: calc(100vh - var(--bar-h));
   transition: grid-template-columns 0.2s var(--ease);
 }
 .layout.is-collapsed {
@@ -518,8 +525,8 @@ ul.tight {
 }
 .sidebar {
   position: sticky;
-  top: 50px;
-  height: calc(100vh - 64px);
+  top: calc(var(--bar-h) + 14px);
+  height: calc(100vh - var(--bar-h) - 28px);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -690,7 +697,7 @@ ul.tight {
 }
 .topbar {
   position: sticky;
-  top: 50px;
+  top: calc(var(--bar-h) + 14px);
   z-index: 30;
   display: flex;
   align-items: center;
@@ -701,6 +708,16 @@ ul.tight {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
+}
+/* Masks the page padding above the sticky topbar, so scrolled content never shows over it. */
+.topbar::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: 100%;
+  height: 15px;
+  background: var(--canvas);
 }
 .crumbs {
   flex: 1;
@@ -2594,6 +2611,51 @@ input[type='radio'] {
 .dash-grid > .stack {
   gap: 14px;
 }
+/* Dashboard masonry (useMasonry): rows dissolve into one 12-column grid of 2 px rows; each card spans its height. */
+.dash-masonry {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 2px;
+  grid-auto-flow: row dense; /* a later card may move up into an earlier hole */
+  column-gap: 14px;
+  row-gap: 0;
+  align-items: start;
+}
+.dash-masonry > * {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.dash-masonry > .dash-grid {
+  display: contents;
+}
+/* One rhythm of thirds, so column edges line up and short cards can fill any hole: the wide card of a pair is 2/3. */
+.dash-masonry > .dash-grid > * {
+  grid-column: span 4;
+  min-width: 0;
+}
+.dash-masonry > .dash-grid > :first-child {
+  grid-column: span 8;
+}
+.dash-masonry > .dash-grid > :only-child {
+  grid-column: 1 / -1;
+}
+.dash-masonry > .dash-grid.three > * {
+  grid-column: span 4;
+}
+@media (max-width: 1200px) {
+  .dash-masonry > .dash-grid > *,
+  .dash-masonry > .dash-grid > :first-child,
+  .dash-masonry > .dash-grid.three > * {
+    grid-column: span 6;
+  }
+}
+@media (max-width: 1024px) {
+  .dash-masonry > .dash-grid > *,
+  .dash-masonry > .dash-grid > :first-child,
+  .dash-masonry > .dash-grid.three > * {
+    grid-column: 1 / -1;
+  }
+}
 .health {
   display: grid;
   gap: 14px;
@@ -3511,6 +3573,41 @@ button.barlist-row {
 .task-head h1 {
   font-size: 21px;
 }
+/* Escalation clock at the top of the task's Escalations tab, above the history. */
+.esc-clock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 26px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.esc-clock-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.esc-clock-fact span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.esc-clock-ladder {
+  flex: 0 1 280px;
+  min-width: 220px;
+}
+/* Task header right column: the actions, and under them the escalation level bar (owner, 2026-11-11). */
+.task-head-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+.head-ladder {
+  width: 300px;
+  max-width: 100%;
+}
 .task-head-actions {
   display: flex;
   gap: 8px;
@@ -4109,88 +4206,58 @@ button.barlist-row {
   border-radius: 10px;
 }
 
-/* Org chart */
-.org-tree,
-.org-children {
+/* Leaderboard podium (PerformancePages BoardVisuals): the winner in the middle, raised. */
+.podium {
   list-style: none;
   margin: 0;
   padding: 0;
-}
-.org-children {
-  margin-left: 22px;
-  padding-left: 16px;
-  border-left: 1px dashed var(--border-strong);
-}
-.org-node {
-  position: relative;
-  padding: 4px 0;
-}
-.org-children > .org-node::before {
-  content: '';
-  position: absolute;
-  left: -16px;
-  top: 26px;
-  width: 14px;
-  border-top: 1px dashed var(--border-strong);
-}
-.org-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  max-width: 820px;
-  flex-wrap: wrap;
-  border-left: 3px solid var(--border-strong);
-  transition: border-color 0.12s, box-shadow 0.12s;
-}
-.org-card:hover {
-  box-shadow: var(--shadow);
-}
-.role-edge-cos {
-  border-left-color: var(--navy);
-}
-.role-edge-manager {
-  border-left-color: var(--violet);
-}
-.role-edge-lead {
-  border-left-color: var(--primary);
-}
-.org-card.inactive {
-  opacity: 0.6;
-}
-.org-node.dim > .org-card {
-  opacity: 0.4;
-}
-.org-node.hit > .org-card {
-  border-color: var(--primary);
-  box-shadow: var(--focus);
-}
-.org-toggle {
-  border: 0;
-  background: var(--surface-3);
-  border-radius: 6px;
-  width: 22px;
-  height: 22px;
   display: grid;
-  place-items: center;
-  cursor: pointer;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px;
 }
-.org-toggle-spacer {
-  width: 22px;
-}
-.org-info {
-  flex: 1 1 160px;
+.podium li {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: center;
   min-width: 0;
 }
-.org-name {
-  font-weight: 600;
-  color: var(--text);
+.podium li > a,
+.podium li > strong {
+  font-weight: 650;
+  overflow-wrap: anywhere;
 }
+.podium-1 {
+  order: 2;
+  padding-top: 26px !important;
+  border-color: var(--warn) !important;
+}
+.podium-2 {
+  order: 1;
+}
+.podium-3 {
+  order: 3;
+}
+.podium-medal {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.podium-score {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+/* Org chart */
 .org-count {
   font-size: 11px;
   font-weight: 650;
@@ -4216,6 +4283,274 @@ button.barlist-row {
 .org-load.danger {
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+/* Org chart canvas (OrgPage reporting view): top band, then one column per entity under a coloured pill. */
+.oc-canvas {
+  --oc-line: var(--faint);
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.oc-scroll {
+  overflow: auto;
+  max-height: 75vh;
+  padding: 24px 16px 72px;
+  background-color: var(--surface-2);
+  background-image: radial-gradient(var(--border-strong) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+.oc-chart {
+  width: max-content;
+  margin: 0 auto;
+}
+.oc-top,
+.oc-branch,
+.oc-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+/* Top band: a centred vertical chain (CEO → CoS). ponytail: several people on one level sit in a row without a bar. */
+.oc-top,
+.oc-top .oc-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.oc-top .oc-children {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding-top: 22px;
+}
+.oc-top .oc-children::before,
+.oc-cols::before,
+.oc-col::after,
+.oc-branch::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: 22px;
+  border-left: 1.5px solid var(--oc-line);
+}
+.oc-top .oc-card {
+  width: 260px;
+}
+.oc-top .oc-children {
+  margin-left: 0;
+}
+/* Columns hang off one horizontal bar that runs from the first column's centre to the last one's. */
+.oc-cols {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding-top: 22px;
+}
+.oc-col {
+  position: relative;
+  width: 280px;
+  padding: 22px 10px 0;
+}
+.oc-col::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  border-top: 1.5px solid var(--oc-line);
+}
+.oc-col:first-child::before {
+  left: 50%;
+}
+.oc-col:last-child::before {
+  right: 50%;
+}
+.oc-pill {
+  color: var(--surface);
+  font-size: 12.5px;
+  font-weight: 650;
+  text-align: center;
+  padding: 7px 12px;
+  border-radius: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.oc-branch {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 22px;
+}
+/* Reports: indented, joined by elbow lines that each child draws for itself. */
+.oc-children {
+  margin-left: 22px;
+}
+.oc-col .oc-children > .oc-node {
+  position: relative;
+  padding-top: 10px;
+}
+.oc-col .oc-children > .oc-node::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 0;
+  width: 10px;
+  height: 38px;
+  border-left: 1.5px solid var(--oc-line);
+  border-bottom: 1.5px solid var(--oc-line);
+  border-bottom-left-radius: 8px;
+}
+.oc-col .oc-children > .oc-node:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 0;
+  bottom: 0;
+  border-left: 1.5px solid var(--oc-line);
+}
+.oc-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 10px 8px 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.oc-card:hover {
+  border-color: var(--border-strong);
+}
+.oc-card.inactive {
+  opacity: 0.6;
+}
+.oc-node.dim > .oc-card {
+  opacity: 0.4;
+}
+.oc-node.hit > .oc-card {
+  border-color: var(--primary);
+  box-shadow: var(--focus);
+}
+.oc-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.oc-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oc-name {
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  font-weight: 650;
+  color: var(--text);
+}
+.oc-title {
+  font-size: 12px;
+  color: var(--muted);
+}
+.oc-meta {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.oc-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.oc-toggle:hover {
+  background: var(--border);
+}
+.oc-zoom {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.oc-zoom button {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--text);
+  color: var(--surface);
+  font: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.oc-zoom button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.oc-zoom .oc-zoom-level {
+  font-size: 10.5px;
+}
+/* Verticals & departments page (ADR-0011): one line per fact, icon actions kept on one row. */
+.vt-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.vt-gm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.vt-note {
+  margin: 6px 0 0;
+}
+.vt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+}
+.vt-depts {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.vt-depts li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.vt-dept-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.vt-dept-text strong {
+  overflow-wrap: anywhere;
 }
 .team-grid {
   display: grid;
@@ -4270,33 +4605,151 @@ button.barlist-row {
   place-items: center;
   padding: 40px;
 }
-.auth-side-inner {
-  max-width: 420px;
+/* Sign-in illustration panel: the picture fills the rounded panel; its headline sits top-left, so that corner is kept. */
+.auth-art {
+  padding: 24px;
+  overflow: hidden;
+  background: transparent;
   display: grid;
-  gap: 18px;
+  place-items: center;
+  /* One screen tall and kept in view: a long form (dev sign-in list) must not stretch and over-zoom the picture. */
+  position: sticky;
+  top: 14px;
+  align-self: start;
+  height: calc(100vh - 28px);
 }
-.auth-side .eyebrow {
-  color: #9db6da;
+.auth-art img {
+  width: 100%;
+  height: 100%;
+  max-width: 760px;
+  object-fit: contain;
+  display: block;
 }
-.ladder {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 12px;
+/* Sign-in page (owner 2026-11-11): plain white page in light theme, black in dark; the form in a glowing deep-blue card. */
+.auth {
+  background: #ffffff;
 }
-.ladder li {
+:root[data-theme='dark'] .auth {
+  background: #000000;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .auth {
+    background: #000000;
+  }
+}
+.auth-card {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  font-size: 13.5px;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 34px 36px 32px;
+  border-radius: 24px;
+  color: #ffffff;
+  background: linear-gradient(165deg, #0e3d93 0%, #0a2b6f 55%, #081e52 100%);
+  border: 2px solid #2f80ff;
+  box-shadow: 0 0 0 4px rgba(47, 128, 255, 0.14), 0 0 42px rgba(47, 128, 255, 0.35);
 }
-.auth-side .muted {
-  color: #9db6da;
+.auth-card h1,
+.auth-card .brand-text strong,
+.auth-card label {
+  color: #ffffff;
+}
+.auth-card .muted,
+.auth-card .field-hint {
+  color: #c4d5f2;
+}
+.auth-card .brand-mark {
+  background: #ffffff;
+  color: #1f6fe0;
+}
+.auth-card a {
+  color: #5ec8ff;
+}
+.auth-card .input {
+  background: #ffffff;
+  color: #0f1b2d;
+  border-color: transparent;
+}
+/* The fields stay white in both themes, including when the browser autofills them. */
+.auth-card .input {
+  color-scheme: light;
+}
+.auth-card .input:-webkit-autofill,
+.auth-card .input:-webkit-autofill:hover,
+.auth-card .input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 40px #ffffff inset;
+  -webkit-text-fill-color: #0f1b2d;
+  caret-color: #0f1b2d;
+}
+/* Dev sign-in tiles keep the theme's own colours inside the blue card. */
+.auth-card .demo-login {
+  color: var(--text);
+}
+.auth-card .demo-login .eyebrow {
+  color: #c4d5f2;
+}
+.auth-card .input::placeholder {
+  color: #6b7a90;
+}
+.auth-card .input-icon > svg,
+.auth-card .input-icon-btn {
+  color: #5b6b82;
+}
+.auth-card .input-icon-btn:hover {
+  background: #eef2f7;
+  color: #0f1b2d;
+}
+.auth-card .field-msg {
+  color: #ffb3ad;
+}
+.auth-card .btn-primary {
+  background: linear-gradient(90deg, #1f7cf2, #3390ff);
+  color: #ffffff;
+  border-color: transparent;
+}
+/* An input with a leading icon (and an optional trailing button), as on the sign-in form. */
+.input-icon {
+  position: relative;
+  display: block;
+}
+.input-icon > svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.input-icon > .input {
+  padding-left: 40px;
+}
+.input-icon:has(.input-icon-btn) > .input {
+  padding-right: 44px;
+}
+.input-icon-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.input-icon-btn:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.input-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
 }
 .demo-login {
   margin-top: 18px;
@@ -4570,12 +5023,11 @@ button.barlist-row {
   .task-head-actions {
     justify-content: flex-start;
   }
+  .task-head-side {
+    align-items: flex-start;
+  }
   .reviews li {
     grid-template-columns: 1fr;
-  }
-  .org-children {
-    margin-left: 8px;
-    padding-left: 10px;
   }
   .demo-login-grid {
     grid-template-columns: 1fr;
@@ -4841,9 +5293,6 @@ button.barlist-row {
 .role-ceo {
   background: linear-gradient(135deg, var(--navy), #3b2a7a);
   color: #fff;
-}
-.role-edge-ceo {
-  border-left-color: #3b2a7a;
 }
 .email-body .pre,
 .pre {

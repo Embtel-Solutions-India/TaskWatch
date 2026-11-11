@@ -127,7 +127,7 @@ const personBody = (i: StaffInput) => ({
   title: i.title,
   roles: i.roles,
   entityId: i.entityId,
-  managerId: nid(i.managerId),
+  // ADR-0011: no managerId; the server places the person (D-130).
   teamId: nid(i.teamId),
   location: i.location,
   phone: i.phone || null,
@@ -191,7 +191,15 @@ export const adminServer = {
   },
   /** ORG-02: manager and team in one call, so the server commits both or neither. */
   setPlacement: async (userId: string, managerId: string | null, teamId: string | null): Promise<void> =>
-    void (await http('PUT', `/people/${userId}/placement`, { managerId: nid(managerId), teamId: nid(teamId) })),
+    void (await http('PUT', `/people/${userId}/placement`, { teamId: nid(teamId) })), // ADR-0011: the line follows the department
+
+  // ADR-0011 / D-131: verticals (entities) and departments (teams), for manage_staff. Never deleted, only archived.
+  createVertical: async (v: { id: string; name: string; headId: string | null }): Promise<void> => void (await http('POST', '/entities', { ...v, headId: nid(v.headId) })),
+  updateVertical: async (id: string, v: { name: string; headId: string | null }): Promise<void> => void (await http('PUT', `/entities/${id}`, { ...v, headId: nid(v.headId) })),
+  archiveVertical: async (id: string): Promise<void> => void (await http('POST', `/entities/${id}/archive`, {})),
+  createDepartment: async (d: { entityId: string; name: string; leadId: string | null }): Promise<void> => void (await http('POST', '/teams', { ...d, leadId: nid(d.leadId) })),
+  updateDepartment: async (id: string, d: { name: string; leadId: string | null }): Promise<void> => void (await http('PUT', `/teams/${id}`, { ...d, leadId: nid(d.leadId) })),
+  archiveDepartment: async (id: string): Promise<void> => void (await http('POST', `/teams/${id}/archive`, {})),
 
   roles: () => http<{ matrix: Record<Role, readonly Permission[]>; counts: Record<Role, number> }>('GET', '/roles'),
   setRolePermissions: async (role: Role, permissions: readonly Permission[]): Promise<void> => void (await http('PUT', `/roles/${role}`, { permissions })),

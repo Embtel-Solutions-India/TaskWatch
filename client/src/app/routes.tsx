@@ -10,6 +10,7 @@ import { PoliciesPage, RolesPage, SettingsPage } from '../features/admin/AdminPa
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 import { NotificationsPage } from '../features/notifications/NotificationsPage';
 import { OrgPage } from '../features/org/OrgPage';
+import { VerticalsPage } from '../features/org/VerticalsPage';
 import { AccountabilityPage, ReportPage, ReportsIndexPage } from '../features/reports/ReportsPages';
 import { StaffDirectoryPage, StaffProfilePage } from '../features/staff/StaffPages';
 import { TeamPage } from '../features/staff/TeamPage';
@@ -69,11 +70,12 @@ export const ROUTES: RouteDef[] = [
   { path: '/workload', title: 'Workload', element: <WorkloadPage />, server: true, nav: { section: 'Management', icon: 'users' } },
   { path: '/recurring', title: 'Recurring Tasks', element: <RecurringPage />, allow: (db, u) => creates(db, u) && hasPerm(db, u, 'assign_tasks'), server: 'create_tasks', nav: { section: 'Management', icon: 'repeat' } },
   { path: '/reports', title: 'Accountability Reports', element: <ReportsIndexPage />, allow: reports, server: REPORT_PERMS, nav: { section: 'Management', icon: 'chart', label: 'Reports' } },
-  { path: '/reports/entities', title: 'Entity & person accountability', element: <AccountabilityPage />, allow: reports, server: REPORT_PERMS, parent: '/reports' },
+  { path: '/reports/entities', title: 'Vertical & person accountability', element: <AccountabilityPage />, allow: reports, server: REPORT_PERMS, parent: '/reports' },
   { path: '/reports/:reportId', title: 'Report', element: <ReportPage />, allow: reports, server: REPORT_PERMS, parent: '/reports' },
 
   { path: '/admin/staff', title: 'Staff Management', element: <StaffDirectoryPage />, allow: perm('manage_staff'), server: 'manage_staff', nav: { section: 'Administration', icon: 'users', label: 'Staff' } },
   { path: '/admin/staff/:id', title: 'Staff profile', element: <StaffProfilePage />, parent: '/admin/staff', server: true },
+  { path: '/admin/verticals', title: 'Verticals & departments', element: <VerticalsPage />, allow: perm('manage_staff'), server: 'manage_staff', nav: { section: 'Administration', icon: 'building', label: 'Verticals' } },
   { path: '/admin/org', title: 'Organization Structure', element: <OrgPage />, allow: perm('manage_staff'), server: 'manage_staff', nav: { section: 'Administration', icon: 'tree', label: 'Organization' } },
   { path: '/admin/roles', title: 'Roles & Permissions', element: <RolesPage />, allow: perm('manage_roles'), server: 'manage_roles', nav: { section: 'Administration', icon: 'key' } },
   { path: '/admin/policies', title: 'Escalation Policies', element: <PoliciesPage />, allow: perm('manage_escalation_policies'), server: 'manage_escalation_policies', nav: { section: 'Administration', icon: 'sliders' } },

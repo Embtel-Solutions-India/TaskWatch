@@ -1,10 +1,13 @@
 // PERF pages (PERFORMANCE-FRD §6): team leaderboard, person breakdown, team workload. Server mode only.
-import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Card, Empty, ErrorState, Input, PageHeader, Segmented, Select, Skeleton, Stat, Tag } from '../../components/ui';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { BarList, LineChart } from '../../components/charts';
+import { Avatar, Card, Empty, ErrorState, Input, PageHeader, Segmented, Select, Skeleton, Stat, Tag } from '../../components/ui';
 import { useApi, useCan, useMe } from '../../hooks';
 import { BACKEND } from '../../services/http';
-import { fmt, leaderboard, perfTeams, personBreakdown, SERVER_ONLY, teamWorkload, type BreakdownTask, type PeriodKind, type PeriodParams } from '../../services/api/performance';
+import { fmt, leaderboard, perfAnalytics, perfTeams, type Analytics, type LeaderRow, personBreakdown, SERVER_ONLY, teamWorkload, type BreakdownTask, type PeriodKind, type PeriodParams, type Weights } from '../../services/api/performance';
 import { formatDate } from '../../utils/format';
+import { PRIORITY_LABEL } from '../../constants';
+import { PRIORITIES } from '../../types';
 
 function ServerOnly({ title }: { title: string }) {
   return (
@@ -77,6 +80,7 @@ export function LeaderboardPage() {
   const { teams, teamId, setTeamId, error: teamsError } = useTeam();
   const ready = BACKEND === 'server' && teamId !== null && (period.period !== 'custom' || (!!period.from && !!period.to));
   const q = useApi(['perf-board', teamId, period], () => (ready ? leaderboard(teamId!, period) : Promise.resolve(null)));
+  const charts = useApi(['perf-analytics', teamId, period], () => (ready ? perfAnalytics(teamId!, period) : Promise.resolve(null)));
   if (BACKEND !== 'server') return <ServerOnly title="Team performance" />;
   if (teamsError || q.error) return <ErrorState error={(teamsError ?? q.error) as never} />;
   const board = q.data;
@@ -84,7 +88,7 @@ export function LeaderboardPage() {
     <div className="page">
       <PageHeader
         title="Team performance"
-        description="Outcome, timeliness and quality of the tasks due in the period. People are compared only with their own team."
+        description="Ranked on the Outcome Score of the tasks due in the period. People are compared only with their own team."
         actions={teams.length > 1 ? <TeamSelect teams={teams} teamId={teamId} onChange={setTeamId} /> : undefined}
       />
       <PeriodPicker value={period} onChange={setPeriod} />
@@ -95,6 +99,8 @@ export function LeaderboardPage() {
       ) : !board ? (
         <Skeleton rows={5} />
       ) : (
+        <>
+        <BoardVisuals rows={board.rows} analytics={charts.data ?? null} teamId={teamId} onTeam={setTeamId} canOpen={(id) => id === Number(me.id) || canDrill} periodQs={periodQs(period)} />
         <div className="table-card">
           <div className="table-scroll">
             <table className="table">
@@ -103,10 +109,10 @@ export function LeaderboardPage() {
                 <tr>
                   <th>Rank</th>
                   <th>Employee</th>
-                  <th className="right">Outcome</th>
-                  <th className="right">Timeliness</th>
-                  <th className="right">Quality</th>
-                  <th className="right">Score</th>
+                  <th className="right">Outcome score</th>
+                  <th className="right muted">Timeliness</th>
+                  <th className="right muted">Quality</th>
+                  <th className="right muted">Efficiency</th>
                 </tr>
               </thead>
               <tbody>
@@ -117,19 +123,111 @@ export function LeaderboardPage() {
                       {r.userId === Number(me.id) || canDrill ? <Link to={`/performance/people/${r.userId}?${periodQs(period)}`}>{r.name}</Link> : r.name}{' '}
                       {r.flags.includes('no_quality_reviews') && <Tag tone="muted">No quality reviews</Tag>}
                     </td>
-                    <td data-label="Outcome" className="right">{fmt(r.outcome)}</td>
-                    <td data-label="Timeliness" className="right">{fmt(r.timeliness)}</td>
-                    <td data-label="Quality" className="right">{fmt(r.quality)}</td>
-                    <td data-label="Score" className="right"><strong>{fmt(r.score)}</strong></td>
+                    <td data-label="Outcome score" className="right"><strong>{fmt(r.score)}</strong></td>
+                    <td data-label="Timeliness" className="right muted">{fmt(r.timeliness)}</td>
+                    <td data-label="Quality" className="right muted">{fmt(r.quality)}</td>
+                    <td data-label="Efficiency" className="right muted">{fmt(r.efficiency)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="muted small pad">Score = Outcome × 50% + Timeliness × 20% + Quality × 30%. Figures rounded to one decimal.</p>
+          <ScoreRule weights={board.weights} />
         </div>
+        </>
       )}
     </div>
+  );
+}
+
+const MEDAL = ['1st', '2nd', '3rd'];
+const weekLabel = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+/** Leaderboard visuals: top-3 podium, everyone's Outcome Score, the team's weekly trend and, for management, teams side by side. */
+function BoardVisuals({ rows, analytics, teamId, onTeam, canOpen, periodQs }: { rows: LeaderRow[]; analytics: Analytics | null; teamId: number | null; onTeam: (id: number) => void; canOpen: (userId: number) => boolean; periodQs: string }) {
+  const nav = useNavigate();
+  const top = rows.filter((r) => r.rank !== null).slice(0, 3);
+  const scored = rows.filter((r) => r.score !== null).sort((a, b) => b.score! - a.score!);
+  const weeks = analytics?.trend.filter((w) => w.average !== null) ?? [];
+  const open = (userId: number) => canOpen(userId) && nav(`/performance/people/${userId}?${periodQs}`);
+  return (
+    <div className="dash-grid">
+      <Card title="Top performers" sub="The three highest Outcome Scores among ranked people.">
+        {top.length ? (
+          <ol className="podium">
+            {top.map((r, i) => (
+              <li key={r.userId} className={`podium-${i + 1}`}>
+                <span className="podium-medal">{MEDAL[i]}</span>
+                <Avatar name={r.name} size={40} />
+                {canOpen(r.userId) ? <Link to={`/performance/people/${r.userId}?${periodQs}`}>{r.name}</Link> : <strong>{r.name}</strong>}
+                <span className="podium-score">{fmt(r.score)}</span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <Empty icon="chart" title="Nobody is ranked yet">People are ranked once they have 5 scored tasks due in the period.</Empty>
+        )}
+      </Card>
+      <Card title="Outcome scores" sub="Everyone with a score in the period, best first.">
+        {scored.length ? (
+          <BarList
+            label="Outcome score by person"
+            data={scored.map((r) => ({ label: r.name, value: Math.round(r.score! * 10) / 10, tone: 'series-1', hint: r.rank ? `Rank ${r.rank}` : 'Not ranked' }))}
+            format={(v) => v.toFixed(1)}
+            max={100}
+            onSelect={(d) => {
+              const r = scored.find((x) => x.name === d.label);
+              if (r) open(r.userId);
+            }}
+          />
+        ) : (
+          <Empty icon="chart" title="No scores yet">Scores appear once scored tasks fall due in the period.</Empty>
+        )}
+      </Card>
+      <Card title="Score trend" sub="The team's average Outcome Score, week by week (last 8 weeks; weeks without scored tasks are skipped).">
+        {weeks.length > 1 ? (
+          <LineChart label="Team average Outcome Score by week" categories={weeks.map((w) => weekLabel(w.from))} series={[{ name: 'Team average', values: weeks.map((w) => w.average!), tone: 'series-1' }]} />
+        ) : (
+          <Empty icon="chart" title="Not enough history">The trend needs scores in at least two weeks.</Empty>
+        )}
+      </Card>
+      {!!analytics?.teams.length && (
+        <Card title="Team comparison" sub="Average Outcome Score per team in the period. Choose a team to open its board.">
+          {analytics.teams.some((t) => t.average !== null) && (
+            <BarList
+              label="Average Outcome Score by team"
+              data={analytics.teams.filter((t) => t.average !== null).map((t) => ({ label: t.name, value: t.average!, tone: t.id === teamId ? 'series-2' : 'series-1', hint: `${t.scored} of ${t.people} people scored` }))}
+              format={(v) => v.toFixed(1)}
+              max={100}
+              onSelect={(d) => {
+                const t = analytics.teams.find((x) => x.name === d.label);
+                if (t) onTeam(t.id);
+              }}
+            />
+          )}
+          {/* A team without scores has no average; showing 0.0 would read as a failing score. */}
+          {analytics.teams.some((t) => t.average === null) && (
+            <p className="muted small">
+              No scores yet:{' '}
+              {analytics.teams
+                .filter((t) => t.average === null)
+                .map((t) => t.name)
+                .join(', ')}
+              .
+            </p>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/** D-124: the ranking rule and the weights in force, so both are visible wherever a score is shown. */
+function ScoreRule({ weights }: { weights: Weights }) {
+  return (
+    <p className="muted small pad">
+      Outcome score = Σ(task outcome × weight) ÷ Σ(weight). Task outcome = achieved ÷ target, capped at 100 %, or the reviewer's rating when the task has no target. Weights by priority: {PRIORITIES.map((p) => `${PRIORITY_LABEL[p]} ${weights[p]}`).join(' · ')} (set in Settings). Accepted shortfalls are left out. Timeliness, quality and efficiency are shown for context and do not change the rank. Figures rounded to one decimal.
+    </p>
   );
 }
 
@@ -158,8 +256,7 @@ export function PersonPerformancePage() {
       ) : (
         <>
           <div className="stats">
-            <Stat label="Score" value={fmt(d.score.score)} hint={d.score.ranked ? undefined : 'Not ranked'} />
-            <Stat label="Outcome" value={fmt(d.score.outcome)} />
+            <Stat label="Outcome score" value={fmt(d.score.score)} hint={d.score.ranked ? 'Ranks the leaderboard' : 'Not ranked'} />
             <Stat label="Timeliness" value={fmt(d.score.timeliness)} />
             <Stat label="Quality" value={fmt(d.score.quality)} hint={d.score.flags.includes('no_quality_reviews') ? 'No quality reviews' : undefined} />
             <Stat label="Efficiency" value={fmt(d.score.efficiency)} hint={`Critical/High ${fmt(d.score.efficiencyByPressure.high)} · Normal/Low ${fmt(d.score.efficiencyByPressure.normal)}`} />
@@ -173,6 +270,7 @@ export function PersonPerformancePage() {
                     <th>Task</th>
                     <th>Due</th>
                     <th className="right">Outcome</th>
+                    <th className="right">Weight</th>
                     <th>On time</th>
                     <th className="right">Quality</th>
                     <th className="right">Rework</th>
@@ -185,6 +283,7 @@ export function PersonPerformancePage() {
                       <td data-label="Task"><Link to={`/tasks/${t.id}`}>{t.title}</Link></td>
                       <td data-label="Due">{formatDate(t.dueAt)}</td>
                       <td data-label="Outcome" className="right">{fmt(t.outcome)}</td>
+                      <td data-label="Weight" className="right">{t.weight}</td>
                       <td data-label="On time">{t.onTime ? <Tag tone="ok">On time</Tag> : <Tag tone="warn">Late</Tag>}</td>
                       <td data-label="Quality" className="right">{fmt(t.quality)}</td>
                       <td data-label="Rework" className="right">{t.reworkCount}</td>
@@ -195,6 +294,7 @@ export function PersonPerformancePage() {
               </table>
             </div>
             {!d.tasks.length && <Empty icon="inbox" title="No scored tasks due in this period" />}
+            <ScoreRule weights={d.weights} />
           </div>
         </>
       )}

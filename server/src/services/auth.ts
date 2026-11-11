@@ -2,7 +2,14 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { pool } from '../db/pool.js';
+import { z } from 'zod';
 import { HttpError } from '../http/errors.js';
+
+/** AUTH-04: the password rule, shared by password reset and the production bootstrap. */
+export const passwordRule = z
+  .string({ error: 'Use at least 10 characters.' })
+  .min(10, { error: 'Use at least 10 characters.' })
+  .refine((p) => /[A-Za-z]/.test(p) && /[0-9]/.test(p), { error: 'Use letters and at least one number.' });
 
 const scrypt = promisify(crypto.scrypt) as (pw: string, salt: Buffer, keylen: number, opts: crypto.ScryptOptions) => Promise<Buffer>;
 

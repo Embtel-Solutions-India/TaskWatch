@@ -102,18 +102,20 @@ function minutesOf(hhmm: string): number {
   return (h ?? 0) * 60 + (m ?? 0);
 }
 
+/** One formatter per zone: building an Intl.DateTimeFormat is far slower than using one (D-125 review). */
+const formatters = new Map<string, Intl.DateTimeFormat>();
+const formatterFor = (timeZone: string) => {
+  let f = formatters.get(timeZone);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
+    formatters.set(timeZone, f);
+  }
+  return f;
+};
+
 /** Wall-clock fields of instant `t` in `timeZone`. */
 export function wallClock(timeZone: string, t: number) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: 'numeric',
-    second: 'numeric',
-  }).formatToParts(t);
+  const parts = formatterFor(timeZone).formatToParts(t);
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
   return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour'), minute: get('minute'), second: get('second') };
 }

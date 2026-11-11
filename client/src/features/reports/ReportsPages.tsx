@@ -42,7 +42,7 @@ const DEFINITIONS: Record<string, string> = {
 };
 
 /** RPT-05/06 (WO FR-11). Server only: the prototype has no first-response data. */
-const FR11: Def = { id: 'entities', title: 'Entity & Person Accountability', question: 'Per entity: open, on track, amber, red, longest silence. Per person: first response, escalations, on-time %.', icon: 'layers' };
+const FR11: Def = { id: 'entities', title: 'Vertical & Person Accountability', question: 'Per vertical: open, on track, amber, red, longest silence. Per person: first response, escalations, on-time %.', icon: 'layers' };
 
 export function ReportsIndexPage() {
   const scope = useApi(['report-scope'], reportScope);
@@ -297,9 +297,9 @@ export function AccountabilityPage() {
         <Skeleton rows={10} />
       ) : (
         <>
-          <Card title="By entity" sub="Open tasks now. Amber = L0–L1, red = L2–L3. The period applies to the person table only.">
+          <Card title="By vertical" sub="Open tasks now. Amber = L0–L1, red = L2–L3. The period applies to the person table only.">
             <T
-              head={['Entity', 'Open', 'On track', 'Amber', 'Red', 'Blocked', 'Longest silence', 'Longest-silent task']}
+              head={['Vertical', 'Open', 'On track', 'Amber', 'Red', 'Blocked', 'Longest silence', 'Longest-silent task']}
               rows={a.byEntity.map((e) => [
                 e.entityName,
                 e.open,
@@ -314,7 +314,7 @@ export function AccountabilityPage() {
           </Card>
           <Card title="By person" sub={`First response, escalations and closures in the last ${a.days} days; open tasks now.`}>
             <T
-              head={['Person', 'Entity', 'Open tasks', 'Avg first response', 'Escalations (L1+)', 'Closed', 'On time', 'On-time %']}
+              head={['Person', 'Vertical', 'Open tasks', 'Avg first response', 'Escalations (L1+)', 'Closed', 'On time', 'On-time %']}
               rows={a.byPerson.map((p) => [p.name, p.entityId, p.open, p.avgFirstResponseHours === null ? '—' : `${p.avgFirstResponseHours.toFixed(1)} h`, p.escalations, p.closed, p.onTime, p.onTimePct === null ? '—' : `${p.onTimePct}%`])}
             />
           </Card>

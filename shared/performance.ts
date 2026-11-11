@@ -3,12 +3,14 @@
 import { wallClock, zonedInstant } from '@taskwatch/shared/levels';
 import { LADDER_STATUSES, type Status } from '@taskwatch/shared/workflow';
 
-export const WEIGHTS = { outcome: 0.5, timeliness: 0.2, quality: 0.3 } as const;
 /** People with fewer eligible tasks in the period are shown but not ranked. */
 export const RANK_MIN_TASKS = 5;
 export const WORKLOAD_DAYS = 5;
 
 export type Priority = 'critical' | 'high' | 'normal' | 'low';
+/** D-124: a task's weight in the Outcome Score comes from its priority (Settings; visible on the leaderboard). */
+export type PriorityWeights = Record<Priority, number>;
+export const EQUAL_WEIGHTS: PriorityWeights = { critical: 1, high: 1, normal: 1, low: 1 };
 export type Purpose = 'revenue' | 'support';
 
 export interface ScoredTask {
@@ -83,14 +85,6 @@ export function isEligible(t: ScoredTask, from: Date, to: Date, now: Date): bool
   return t.status === 'completed' || due <= now.getTime();
 }
 
-/** Weighted score over the parts present, rescaled to 100; null when none is present. */
-export function combine(outcome: number | null, timeliness: number | null, quality: number | null): number | null {
-  const parts: [number | null, number][] = [[outcome, WEIGHTS.outcome], [timeliness, WEIGHTS.timeliness], [quality, WEIGHTS.quality]];
-  const present = parts.filter((p): p is [number, number] => p[0] !== null);
-  if (!present.length) return null;
-  return present.reduce((s, [v, w]) => s + v * w, 0) / present.reduce((s, [, w]) => s + w, 0);
-}
-
 export interface PersonScore {
   outcome: number | null;
   timeliness: number | null;
@@ -103,16 +97,22 @@ export interface PersonScore {
   flags: ('no_quality_reviews' | 'outcome_not_rated')[];
 }
 
-export function personScore(tasks: ScoredTask[], from: Date, to: Date, now: Date): PersonScore {
+/**
+ * D-124: Outcome Score = Σ(task outcome × weight) ÷ Σ(weight) over counted tasks (an accepted shortfall is left out), and the
+ * leaderboard score is that Outcome Score alone. Timeliness, quality and efficiency are computed for display only.
+ */
+export function personScore(tasks: ScoredTask[], from: Date, to: Date, now: Date, weights: PriorityWeights = EQUAL_WEIGHTS): PersonScore {
   const eligible = tasks.filter((t) => isEligible(t, from, to, now));
   const counted = eligible.filter((t) => t.shortfallAccepted !== true);
   const outcomes = counted.map((t) => taskOutcome(t, now));
-  const outcome = mean(outcomes.filter((o): o is number => o !== null));
+  const rated = counted.flatMap((t, i) => (outcomes[i] === null ? [] : [{ o: outcomes[i]!, w: weights[t.priority] }]));
+  const weight = rated.reduce((a, r) => a + r.w, 0);
+  const outcome = weight > 0 ? rated.reduce((a, r) => a + r.o * r.w, 0) / weight : null;
   const timely = counted.filter((t) => !t.reassignedAfterDue);
   const timeliness = timely.length ? (timely.filter((t) => isOnTime(t, now)).length / timely.length) * 100 : null;
   const quality = mean(eligible.filter((t) => t.reviewed && t.qualityScore !== null).map((t) => t.qualityScore!));
   const eff = (ts: ScoredTask[]) => mean(ts.map((t) => (isOnTime(t, now) ? (taskOutcome(t, now) ?? 0) : 0)));
-  const score = combine(outcome, timeliness, quality);
+  const score = outcome;
   const flags: PersonScore['flags'] = [];
   if (eligible.length && quality === null) flags.push('no_quality_reviews');
   if (outcomes.some((o) => o === null)) flags.push('outcome_not_rated');
@@ -210,4 +210,61 @@ export function workload(tasks: WorkloadInput[], opts: { now: Date; zone: string
     blocked: open.filter((t) => t.status === 'blocked').length,
     noEstimate: open.filter((t) => t.estimatedHours === null).length,
   };
+}
+
+/** D-125: a person's working shift as wall-clock "HH:MM" times; an end at or before the start runs past midnight. */
+export interface Shift {
+  start: string;
+  end: string;
+}
+
+const mins = (hhmm: string) => {
+  const [h, m] = hhmm.split(':').map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+};
+
+/**
+ * D-105/D-125: a person whose own quiet window covers the middle of the workday (the night team, 08:00–20:00) works the
+ * other hours; everyone else, including someone whose quiet window is only their night (22:00–07:00), works the workday.
+ */
+export function shiftOf(person: { quietStart: string | null; quietEnd: string | null }, org: { workdayStart: string; workdayEnd: string }): Shift {
+  const workday = { start: org.workdayStart, end: org.workdayEnd };
+  if (!person.quietStart || !person.quietEnd) return workday;
+  const [qs, qe, ws, we] = [mins(person.quietStart), mins(person.quietEnd), mins(org.workdayStart), mins(org.workdayEnd)];
+  const mid = (ws + ((we - ws + 1440) % 1440) / 2) % 1440;
+  const quietAtMid = qs < qe ? mid >= qs && mid < qe : mid >= qs || mid < qe;
+  return quietAtMid ? { start: person.quietEnd, end: person.quietStart } : workday;
+}
+
+/**
+ * D-125: hours of [from, to) that fall in the shift, for shifts starting Monday to Friday in `zone`. No timer: this is
+ * how long a task was open in working time. ponytail: no public holidays (owner accepted, 2026-11-11).
+ */
+export function workingHours(from: Date, to: Date, zone: string, shift: Shift): number {
+  if (to.getTime() <= from.getTime()) return 0;
+  const [sh, sm] = shift.start.split(':').map(Number) as [number, number];
+  const [eh, em] = shift.end.split(':').map(Number) as [number, number];
+  const overnight = eh * 60 + em <= sh * 60 + sm;
+  const first = wallClock(zone, from.getTime());
+  let day = new Date(Date.UTC(first.year, first.month - 1, first.day - 1)); // the shift that began yesterday may still run
+  let ms = 0;
+  while (true) {
+    const y = day.getUTCFullYear(), m = day.getUTCMonth() + 1, d = day.getUTCDate();
+    const begin = zonedInstant(zone, y, m, d, sh, sm);
+    if (begin >= to.getTime()) break;
+    const dow = day.getUTCDay();
+    if (dow !== 0 && dow !== 6) {
+      const next = new Date(day.getTime() + 86_400_000);
+      const end = overnight ? zonedInstant(zone, next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), eh, em) : zonedInstant(zone, y, m, d, eh, em);
+      ms += Math.max(0, Math.min(end, to.getTime()) - Math.max(begin, from.getTime()));
+    }
+    day = new Date(day.getTime() + 86_400_000);
+  }
+  return Math.round((ms / 3_600_000) * 100) / 100;
+}
+
+/** Leaderboard analytics: the average of the Outcome Scores people have (no score = left out), and how many have one. */
+export function averageScore(scores: (number | null)[]): { average: number | null; scored: number } {
+  const have = scores.filter((s): s is number => s !== null);
+  return { average: have.length ? Math.round((have.reduce((a, b) => a + b, 0) / have.length) * 10) / 10 : null, scored: have.length };
 }

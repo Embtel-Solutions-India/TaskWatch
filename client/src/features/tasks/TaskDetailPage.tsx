@@ -12,9 +12,9 @@ import type { Activity, ActivityType, Comment, User } from '../../types';
 import type { TaskView } from '../../services/api/base';
 import { ACTIVE_STATUSES } from '../../types';
 import { bytes, cx, dueLabel, formatDateTime, formatShort, hoursLabel, relative } from '../../utils/format';
-import { AckEscalationDialog, CancelDialog, CompleteDialog, DecideExtensionDialog, ExtensionDialog, ProgressDialog, ReassignDialog, ReopenDialog, ReviewDialog, SubmitDialog, type DialogKind, RateDialog } from './TaskDialogs';
+import { AckEscalationDialog, CancelDialog, DiscardDialog, CompleteDialog, DecideExtensionDialog, ExtensionDialog, ProgressDialog, ReassignDialog, ReopenDialog, ReviewDialog, SubmitDialog, type DialogKind, RateDialog } from './TaskDialogs';
 
-type Tab = 'activity' | 'updates' | 'comments' | 'reviews' | 'files' | 'assignments' | 'escalations';
+type Tab = 'activity' | 'details' | 'updates' | 'comments' | 'reviews' | 'files' | 'assignments' | 'escalations';
 
 export function TaskDetailPage() {
   const { id = '' } = useParams();
@@ -55,6 +55,11 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
   if (can('review')) primary.push(<Button key="rev" variant="primary" icon="review" onClick={() => setDialog('review')}>Review submission</Button>);
   if (can('decide_extension')) primary.push(<Button key="dec" icon="clock" onClick={() => setDialog('decide')}>Decide extension</Button>);
   if (can('ack_escalation')) primary.push(<Button key="esc" icon="check" onClick={() => setDialog('ack_escalation')}>Acknowledge escalation</Button>);
+  // D-133: the giver's own actions are buttons, not hidden in the menu.
+  if (can('edit')) primary.push(<Button key="edit" variant="ghost" icon="edit" onClick={() => nav(`/tasks/${t.id}/edit`)}>Edit</Button>);
+  if (can('reassign')) primary.push(<Button key="reas" variant="ghost" icon="users" onClick={() => setDialog('reassign')}>Reassign</Button>);
+  if (can('discard')) primary.push(<Button key="disc" variant="ghost" icon="trash" onClick={() => setDialog('discard')}>Delete draft</Button>);
+  else if (can('cancel')) primary.push(<Button key="canc" variant="ghost" icon="x" onClick={() => setDialog('cancel')}>Cancel task</Button>);
   if (can('rate')) primary.push(<Button key="rate" variant={t.awaitingRating ? 'primary' : 'secondary'} icon="check" onClick={() => setDialog('rate')}>Rate task</Button>);
 
   return (
@@ -66,6 +71,7 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
             <StatusBadge status={t.status} />
             <PriorityBadge priority={t.priority} />
             <LevelBadge level={t.level} acked={t.escalationAcked} long />
+            {running && activeEsc[0] && <Tag tone={activeEsc[0].level >= 2 ? 'danger' : 'warn'}>{activeEsc[0].reason === 'overdue' ? 'Past due' : activeEsc[0].reason === 'blocked' ? 'Marked Blocked' : 'No assignee update'}</Tag>}
             {t.recurrenceId && <Tag tone="info"><Icon name="repeat" size={11} /> Recurring</Tag>}
             {t.reviewRequired && <Tag>Review required</Tag>}
             {t.awaitingRating && <Tag tone="warn">Awaiting rating{t.completedAt && withinRateWindow(t.completedAt) ? ' · rate within 3 working days' : ''}</Tag>}
@@ -75,33 +81,37 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
             Assigned to <strong>{name(t.assigneeId)}</strong> by <strong>{name(t.assignedBy)}</strong> · {t.status === 'completed' ? `completed ${relative(t.completedAt)}` : running || t.status === 'submitted' ? <span className={cx(due.overdue && 'tone-danger')}>{due.text}</span> : formatShort(t.dueAt)}
           </p>
         </div>
-        <div className="task-head-actions">
-          {primary}
-          <Menu
-            label="More actions"
-            items={[
-              can('request_extension') ? { label: 'Request extension', icon: 'clock', onClick: () => setDialog('extension') } : null,
-              can('edit') ? { label: 'Edit task', icon: 'edit', onClick: () => nav(`/tasks/${t.id}/edit`) } : null,
-              can('reassign') ? { label: 'Reassign', icon: 'users', onClick: () => setDialog('reassign') } : null,
-              can('reopen') ? { label: 'Reopen', icon: 'rotate', onClick: () => setDialog('reopen') } : null,
-              can('cancel') ? { label: 'Cancel task', icon: 'x', danger: true, onClick: () => setDialog('cancel') } : null,
-            ]}
-          />
+        <div className="task-head-side">
+          <div className="task-head-actions">
+            {primary}
+            <Menu
+              label="More actions"
+              items={[
+                can('request_extension') ? { label: 'Request extension', icon: 'clock', onClick: () => setDialog('extension') } : null,
+                can('reopen') ? { label: 'Reopen', icon: 'rotate', onClick: () => setDialog('reopen') } : null,
+                can('discard') && can('cancel') ? { label: 'Cancel instead', icon: 'x', danger: true, onClick: () => setDialog('cancel') } : null,
+              ]}
+            />
+          </div>
+          {/* Owner 2026-11-11: the level bar sits under the actions; the rest of the clock strip was removed. */}
+          {running && t.levelInfo && (
+            <div
+              className="ladder-bar head-ladder"
+              aria-label="Silence relative to escalation thresholds"
+              title={`${hoursLabel(t.levelInfo.silentHours)} since the last update${t.levelInfo.next ? ` · next: ${LEVEL_LABEL[t.levelInfo.next.level]} ${relative(new Date(t.levelInfo.next.at).toISOString())}` : ''}`}
+            >
+              {windows.map((w, k) => (
+                <span key={k} className={cx('ladder-step', `lvl-bg-${k}`, t.levelInfo!.silentHours >= w && 'hit')} title={`${LEVEL_LABEL[k]} at ${w} h`}>
+                  L{k}
+                  <small>{w}h</small>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </header>
 
       <div className="banners">
-        {activeEsc.length > 0 && running && (
-          <Banner
-            tone={activeEsc[0]!.level >= 2 ? 'danger' : 'warn'}
-            icon="alert"
-            action={can('ack_escalation') ? <Button size="sm" onClick={() => setDialog('ack_escalation')}>Acknowledge</Button> : undefined}
-          >
-            <strong>{LEVEL_LABEL[activeEsc[0]!.level]}</strong> — {activeEsc[0]!.reason === 'overdue' ? `past due by ${hoursLabel(t.levelInfo?.overdueHours ?? 0)}` : activeEsc[0]!.reason === 'blocked' ? 'marked Blocked' : `no assignee update for ${hoursLabel(t.levelInfo?.silentHours ?? 0)}`}. Alerted: {activeEsc[0]!.recipientIds.map(name).join(', ')}{activeEsc[0]!.ccIds?.length ? ` (copied: ${activeEsc[0]!.ccIds.map(name).join(', ')})` : ''}.
-            {activeEsc[0]!.status === 'acknowledged' && <> Acknowledged by {name(activeEsc[0]!.ackBy)} {relative(activeEsc[0]!.ackAt)}.</>}
-            {t.levelInfo?.next && <> Next: {LEVEL_LABEL[t.levelInfo.next.level]} {relative(new Date(t.levelInfo.next.at).toISOString())}.</>}
-          </Banner>
-        )}
         {isAssignee && running && !t.acknowledgedAt && <Banner tone="info" action={<Button size="sm" variant="primary" onClick={() => ack.run(t.id)}>Acknowledge</Button>}>Let {name(t.assignedBy)} know you've seen this task.</Banner>}
         {t.status === 'changes_requested' && lastReview?.comment && (
           <Banner tone="warn" icon="rotate">
@@ -120,30 +130,6 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
 
       <div className="task-grid">
         <div className="task-main">
-          <Card title="Details">
-            <div className="prose">
-              {t.description ? <p>{t.description}</p> : <p className="muted">No description.</p>}
-              {t.instructions && (
-                <div className="instructions">
-                  <strong>Instructions from {name(t.assignedBy)}</strong>
-                  <p>{t.instructions}</p>
-                </div>
-              )}
-            </div>
-            {d.children.length > 0 && (
-              <div className="subtasks">
-                <h3>Sub-tasks</h3>
-                <ul>
-                  {d.children.map((c) => (
-                    <li key={c.id}>
-                      <Link to={`/tasks/${c.id}`}>{c.id} · {c.title}</Link> <StatusBadge status={c.status} />
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </Card>
-
           <Card pad={false}>
             <Tabs
               label="Task workspace"
@@ -151,6 +137,8 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
               onChange={setTab}
               tabs={[
                 { id: 'activity', label: 'Activity' },
+                // Owner 2026-11-11: the Details card is now a tab here, next to Activity.
+                { id: 'details', label: 'Details', count: d.children.length || undefined },
                 { id: 'updates', label: 'Progress', count: d.updates.length },
                 { id: 'comments', label: 'Comments', count: d.comments.filter((c) => !c.deleted).length },
                 { id: 'reviews', label: 'Reviews', count: d.reviews.length },
@@ -161,6 +149,31 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
             />
             <div className="card-body">
               {tab === 'activity' && <TabPanel id="activity"><Timeline items={d.activities} users={d.users} /></TabPanel>}
+              {tab === 'details' && (
+                <TabPanel id="details">
+                  <div className="prose">
+                    {t.description ? <p>{t.description}</p> : <p className="muted">No description.</p>}
+                    {t.instructions && (
+                      <div className="instructions">
+                        <strong>Instructions from {name(t.assignedBy)}</strong>
+                        <p>{t.instructions}</p>
+                      </div>
+                    )}
+                  </div>
+                  {d.children.length > 0 && (
+                    <div className="subtasks">
+                      <h3>Sub-tasks</h3>
+                      <ul>
+                        {d.children.map((c) => (
+                          <li key={c.id}>
+                            <Link to={`/tasks/${c.id}`}>{c.id} · {c.title}</Link> <StatusBadge status={c.status} />
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </TabPanel>
+              )}
               {tab === 'updates' && (
                 <TabPanel id="updates">
                   {can('progress') && <Button icon="plus" onClick={() => setDialog('progress')} className="mb">Post update</Button>}
@@ -280,46 +293,12 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
                 ['Acknowledged', t.acknowledgedAt ? <span key="ack"><Icon name="check" size={12} /> {formatDateTime(t.acknowledgedAt)}</span> : <span className="tone-warn">Not acknowledged</span>],
                 ['Progress', <span key="p" className="row-gap"><ProgressBar value={t.progress} /> {t.progress}%</span>],
                 ['Category', t.category],
-                ...(measuredFacts(t) as [string, ReactNode][]),
+                ...(measuredFacts(t, d.time) as [string, ReactNode][]),
                 ...(d.recurrence ? ([['Recurrence', describeRecurrence(d.recurrence)]] as [string, ReactNode][]) : []),
                 ...(d.parent ? ([['Parent', <Link key="pa" to={`/tasks/${d.parent.id}`}>{d.parent.id}</Link>]] as [string, ReactNode][]) : []),
               ]}
             />
           </Card>
-          {running && t.levelInfo && (
-            <Card title="Escalation clock" sub="Only an assignee progress update resets it.">
-              <div className="clock">
-                <div className="clock-row">
-                  <span>Since last update</span>
-                  <strong>{hoursLabel(t.levelInfo.silentHours)}</strong>
-                </div>
-                <div className="ladder-bar" aria-label="Silence relative to escalation thresholds">
-                  {windows.map((w, k) => (
-                    <span key={k} className={cx('ladder-step', `lvl-bg-${k}`, t.levelInfo!.silentHours >= w && 'hit')} title={`${LEVEL_LABEL[k]} at ${w} h`}>
-                      L{k}
-                      <small>{w}h</small>
-                    </span>
-                  ))}
-                </div>
-                <div className="clock-row">
-                  <span>Past-due floor</span>
-                  <strong>{t.levelInfo.overdueLevel >= 0 ? `L${t.levelInfo.overdueLevel}` : 'None'}</strong>
-                </div>
-                <div className="clock-row">
-                  <span>Notifications</span>
-                  <strong>{t.snoozeUntil && Date.parse(t.snoozeUntil) > now() ? `Snoozed until ${formatShort(t.snoozeUntil)}` : 'Active'}</strong>
-                </div>
-                {t.levelInfo.next && (
-                  <div className="clock-row">
-                    <span>Next level</span>
-                    <strong>
-                      {LEVEL_LABEL[t.levelInfo.next.level]} {relative(new Date(t.levelInfo.next.at).toISOString())}
-                    </strong>
-                  </div>
-                )}
-              </div>
-            </Card>
-          )}
         </aside>
       </div>
 
@@ -331,6 +310,7 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
       {dialog === 'decide' && pendingExt && <DecideExtensionDialog task={t} ext={pendingExt} onClose={() => setDialog(null)} />}
       {dialog === 'reassign' && <ReassignDialog task={t} onClose={() => setDialog(null)} />}
       {dialog === 'cancel' && <CancelDialog task={t} onClose={() => setDialog(null)} />}
+      {dialog === 'discard' && <DiscardDialog task={t} onClose={() => setDialog(null)} onDone={() => nav('/tasks/assigned-by-me')} />}
       {dialog === 'reopen' && <ReopenDialog task={t} onClose={() => setDialog(null)} />}
       {dialog === 'rate' && <RateDialog task={t} onClose={() => setDialog(null)} />}
       {dialog === 'ack_escalation' && <AckEscalationDialog task={t} eventId={ackEventId} onClose={() => setDialog(null)} />}
@@ -386,10 +366,15 @@ function withinRateWindow(completedAt: string): boolean {
 }
 
 /** PERF facts on the task page (server mode; the prototype has none). */
-function measuredFacts(t: TaskView): [string, ReactNode][] {
+function measuredFacts(t: TaskView, time?: { worked: number; standard: number } | null): [string, ReactNode][] {
   const out: [string, ReactNode][] = [];
   if (t.target != null) out.push(['Target', `${t.achieved ?? 0} of ${t.target} ${t.unit ?? ''}`]);
   if (t.estimatedHours != null) out.push(['Estimated effort', `${t.estimatedHours} h`]);
+  // D-125: working hours since the clock started (scheduled start, else assignment) against the standard.
+  if (time) {
+    const over = time.worked > time.standard;
+    out.push(['Working time', <span key="wt" className={cx(over && 'tone-warn')}>{time.worked.toFixed(1)} h of {time.standard} h standard{over ? ` (+${Math.round(((time.worked - time.standard) / time.standard) * 100)} %)` : ''}</span>]);
+  }
   if (t.purpose) out.push(['Purpose', t.purpose === 'revenue' ? 'Revenue-oriented' : 'Support']);
   if (t.result) out.push(['Result', t.result]);
   if (t.shortfallReason) out.push(['Shortfall / delay reason', `${t.shortfallReason}${t.shortfallAccepted == null ? '' : t.shortfallAccepted ? ' (accepted)' : ' (not accepted)'}`]);

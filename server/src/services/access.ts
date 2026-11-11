@@ -26,6 +26,8 @@ export interface TaskRef {
   created_by?: number | null;
   reviewer_id?: number | null;
   status: string;
+  /** D-133: a discarded draft is visible to nobody. */
+  discarded_at?: Date | null;
   lead_extension_used?: boolean;
 }
 
@@ -53,7 +55,7 @@ export function scopeIds(viewer: DirUser, dir: Directory): number[] {
  * reports' tasks when they hold view_tasks. Enforced on every query.
  */
 export function visibilityFilter(viewer: DirUser, dir: Directory, alias: string, firstParam: number): { sql: string; params: unknown[] } {
-  const org = `${alias}.organization_id = $${firstParam}`;
+  const org = `${alias}.organization_id = $${firstParam} and ${alias}.discarded_at is null`; // D-133
   if (isFoundersOffice(viewer)) return { sql: org, params: [viewer.organizationId] };
   const me = `$${firstParam + 1}`;
   const reports = can(viewer, dir, 'view_tasks') ? [...dir.descendants(viewer.id)] : [];
@@ -65,7 +67,7 @@ export function visibilityFilter(viewer: DirUser, dir: Directory, alias: string,
 }
 
 export function canView(viewer: DirUser, task: TaskRef, dir: Directory): boolean {
-  return sameOrg(viewer, task) && canViewTask(dir.org, viewer, parties(task));
+  return sameOrg(viewer, task) && !task.discarded_at && canViewTask(dir.org, viewer, parties(task));
 }
 
 export type Relation = 'cos' | 'manager' | 'lead' | null;
@@ -110,6 +112,7 @@ export function taskActions(
         isAssignee,
         isOverseer: !isAssignee && isOverseer(dir.org, viewer, p),
         isGiver: p.createdBy === viewer.id || p.assignedBy === viewer.id || isCoS(viewer),
+        isCurrentGiver: p.assignedBy === viewer.id || isCoS(viewer), // D-133: once reassigned, the original creator no longer gives it
         can: (perm) => can(viewer, dir, perm),
         ...facts,
       },

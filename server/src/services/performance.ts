@@ -2,13 +2,13 @@
 // shared formulas. Scope: one's own team for everyone; teams in one's reporting line with view_team_reports; every team
 // in the organization with view_org_reports. A team or person outside that scope is reported as missing (404).
 import {
+  averageScore,
   isEligible,
   isOnTime,
   periodBounds,
   personScore,
   rankRows,
   taskOutcome,
-  WEIGHTS,
   workload,
   type Priority,
   type ScoredTask,
@@ -122,11 +122,12 @@ export async function leaderboard(viewer: DirUser, dir: Directory, teamId: numbe
   const { from, to } = await resolvePeriod(viewer.organizationId, q);
   const rows = await scoredTasks(viewer.organizationId, members.map((m) => m.id), from, to);
   const now = clock.now();
+  const weights = (await getSettings(viewer.organizationId)).priorityWeights; // D-124
   const scored = members.map((m) => {
-    const s = personScore(rows.filter((r) => r.assigneeId === m.id).map((r) => r.task), from, to, now);
+    const s = personScore(rows.filter((r) => r.assigneeId === m.id).map((r) => r.task), from, to, now, weights);
     return { userId: m.id, name: m.name, ...s };
   });
-  return { team, from, to, weights: WEIGHTS, rows: rankRows(scored) };
+  return { team, from, to, weights, rows: rankRows(scored) };
 }
 
 /** GET /api/performance/people/:id — the tasks behind a person's score, with why any is left out. */
@@ -140,6 +141,7 @@ export async function personBreakdown(viewer: DirUser, dir: Directory, personId:
   const { from, to } = await resolvePeriod(viewer.organizationId, q);
   const now = clock.now();
   const rows = await scoredTasks(viewer.organizationId, [personId], from, to);
+  const weights = (await getSettings(viewer.organizationId)).priorityWeights; // D-124
   const tasks = rows.map(({ title, task }) => {
     const outcome = taskOutcome(task, now);
     const excluded = !isEligible(task, from, to, now)
@@ -163,10 +165,11 @@ export async function personBreakdown(viewer: DirUser, dir: Directory, personId:
       quality: task.qualityScore,
       reviewed: task.reviewed,
       reworkCount: task.reworkCount,
+      weight: weights[task.priority],
       excluded,
     };
   });
-  return { person: { id: person.id, name: person.name, teamId: person.teamId }, from, to, weights: WEIGHTS, score: personScore(rows.map((r) => r.task), from, to, now), tasks };
+  return { person: { id: person.id, name: person.name, teamId: person.teamId }, from, to, weights, score: personScore(rows.map((r) => r.task), from, to, now, weights), tasks };
 }
 
 /** Open load per person (FRD §5.8). */
@@ -196,3 +199,40 @@ export async function teamWorkload(viewer: DirUser, dir: Directory, teamId: numb
   return { team, rows: members.map((m) => ({ userId: m.id, name: m.name, ...load.get(m.id)! })) };
 }
 
+
+/**
+ * GET /api/performance/analytics — the leaderboard's charts. `trend`: the team's average Outcome Score for each of the
+ * 8 weeks ending with the period. `teams`: each team the viewer may see, with its average in the period; empty when the
+ * viewer sees only one team (staff and leads compare within their own team, D-117).
+ */
+export async function analytics(viewer: DirUser, dir: Directory, teamId: number, q: PeriodQuery) {
+  const { members } = await loadTeam(viewer, dir, teamId);
+  const { from, to, zone } = await resolvePeriod(viewer.organizationId, q);
+  const now = clock.now();
+  const weights = (await getSettings(viewer.organizationId)).priorityWeights;
+  // Review fix #7: rows grouped by person once, not re-filtered per person, per week and per team.
+  const byPerson = (rows: Awaited<ReturnType<typeof scoredTasks>>) => {
+    const m = new Map<number, ScoredTask[]>();
+    for (const r of rows) m.set(r.assigneeId, [...(m.get(r.assigneeId) ?? []), r.task]);
+    return m;
+  };
+  const teamScore = (grouped: Map<number, ScoredTask[]>, ids: number[], f: Date, t: Date) => averageScore(ids.map((id) => personScore(grouped.get(id) ?? [], f, t, now, weights).score));
+
+  const weeks: { from: Date; to: Date }[] = [];
+  for (let anchor = new Date(Math.min(to.getTime(), now.getTime()) - 1); weeks.length < 8; ) {
+    const w = periodBounds('week', anchor, zone);
+    weeks.unshift(w);
+    anchor = new Date(w.from.getTime() - 1);
+  }
+  const ids = members.map((m) => m.id);
+  const weekRows = byPerson(await scoredTasks(viewer.organizationId, ids, weeks[0]!.from, weeks.at(-1)!.to));
+  const trend = weeks.map((w) => ({ from: w.from, to: w.to, ...teamScore(weekRows, ids, w.from, w.to) }));
+
+  const teams = await visibleTeams(viewer, dir);
+  if (teams.length < 2) return { trend, teams: [] };
+  const byTeam = teams.map((t) => ({ t, ids: dir.all().filter((u) => u.active && u.teamId === t.id).map((u) => u.id) }));
+  const rows = byPerson(await scoredTasks(viewer.organizationId, byTeam.flatMap((x) => x.ids), from, to));
+  const compared = byTeam.map(({ t, ids: people }) => ({ id: t.id, name: t.name, people: people.length, ...teamScore(rows, people, from, to) }));
+  compared.sort((a, b) => (b.average ?? -1) - (a.average ?? -1) || a.name.localeCompare(b.name));
+  return { trend, teams: compared };
+}

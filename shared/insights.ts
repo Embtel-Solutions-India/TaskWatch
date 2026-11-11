@@ -123,7 +123,8 @@ export function kpis(scope: DashTask[], now: number, range: Range, base: string)
   const ps = points(now, range);
   const prevAt = now - range * DAY;
   const openAt = (at: number) => scope.filter((t) => isOpenAt(t, at)).length;
-  const overdueAt = (at: number) => scope.filter((t) => isOpenAt(t, at) && t.dueAt < at).length;
+  // H3: today's figure leaves out tasks now in review, as the task view does; history cannot know past statuses.
+  const overdueAt = (at: number) => scope.filter((t) => isOpenAt(t, at) && t.dueAt < at && !(at >= now && t.status === 'submitted')).length;
   const completion = (from: number, to: number) => {
     const due = scope.filter((t) => t.status !== 'draft' && t.status !== 'cancelled' && t.dueAt >= from && t.dueAt < to);
     if (!due.length) return null;

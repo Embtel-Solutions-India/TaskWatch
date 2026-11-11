@@ -58,6 +58,8 @@ export interface TaskParties<Id = string> {
 export const isCoS = <Id>(p: Person<Id>): boolean => p.roles.includes('cos');
 /** The Founder's Office (CoS and CEO) sees every entity and task (WO roles table, D-33). */
 export const isFoundersOffice = <Id>(p: Person<Id>): boolean => p.roles.includes('cos') || p.roles.includes('ceo');
+/** Flagged "No manager": nobody above them, unless they lead the organization (CoS or CEO; owner 2026-11-11). */
+export const needsManager = (p: { managerId: unknown; roles: readonly Role[] }): boolean => !p.managerId && !p.roles.includes('cos') && !p.roles.includes('ceo');
 
 export function hasPerm<Id>(org: Org<Id>, p: Person<Id> | null | undefined, perm: Permission): boolean {
   if (!p?.active) return false;
@@ -134,4 +136,31 @@ export function canViewUser<Id>(org: Org<Id>, viewer: Person<Id>, target: Person
   if (target.id === viewer.id) return true;
   if (reportsOf(org, viewer.id).has(target.id)) return true;
   return ancestorsOf(org, viewer.id).some((a) => a.id === target.id);
+}
+
+/** ADR-0011: the organization's senior for reporting lines: the first active Chief of Staff, else the first active CEO. */
+export function seniorOf<Id>(people: readonly { id: Id; roles: readonly Role[]; active: boolean }[]): Id | null {
+  const first = (r: Role) => people.find((p) => p.active && p.roles.includes(r))?.id;
+  return first('cos') ?? first('ceo') ?? null;
+}
+
+/**
+ * ADR-0011 / D-130: who a person reports to, automatically. A general manager reports to the senior; a department lead
+ * to their vertical's general manager, else the senior; anyone else to their department's lead, else the general
+ * manager, else the senior. A Chief of Staff reports to the CEO (`ctx.ceo`), the CEO to nobody (review fix #5: a promotion
+ * must move the line too). Pass only active leads, heads and CEO.
+ */
+export function reportsTo<Id>(
+  p: { id: Id; roles: readonly Role[]; entityId: string | null; teamId: Id | null },
+  ctx: { entities: readonly { id: string; headId: Id | null }[]; teams: readonly { id: Id; leadId: Id | null }[]; senior: Id | null; ceo?: Id | null },
+): Id | null {
+  if (p.roles.includes('ceo')) return null;
+  if (p.roles.includes('cos')) return ctx.ceo != null && ctx.ceo !== p.id ? ctx.ceo : null;
+  const other = (x: Id | null | undefined) => (x != null && x !== p.id ? x : null);
+  const gm = ctx.entities.find((e) => e.id === p.entityId)?.headId ?? null;
+  const lead = ctx.teams.find((t) => t.id === p.teamId)?.leadId ?? null;
+  const senior = other(ctx.senior);
+  if (gm === p.id) return senior;
+  if (lead === p.id) return other(gm) ?? senior;
+  return other(lead) ?? other(gm) ?? senior;
 }

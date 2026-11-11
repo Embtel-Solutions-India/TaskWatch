@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AccessDenied, Empty, Skeleton, ToastProvider } from '../components/ui';
 import { ForgotPasswordPage, LoginPage, ResetPasswordPage, SessionExpiredPage } from '../features/auth/AuthPages';
@@ -68,7 +68,17 @@ function Guarded({ route }: { route: RouteDef }) {
 }
 
 function AppRoutes() {
-  const [auth, setAuth] = useState<AuthState>(() => (BACKEND === 'server' ? { loading: true, user: null } : resolveAuth()));
+  const [auth, setAuthState] = useState<AuthState>(() => (BACKEND === 'server' ? { loading: true, user: null } : resolveAuth()));
+  // H4: cached queries are keyed by resource, not by person, so a change of who is signed in (sign-out, expiry, a
+  // different sign-in) drops them all. Otherwise the next person on a shared machine sees the last one's pages.
+  const signedInId = useRef<string | undefined>(auth.user?.id);
+  const setAuth = useCallback((next: AuthState) => {
+    if (next.user?.id !== signedInId.current) {
+      queryClient.clear();
+      signedInId.current = next.user?.id;
+    }
+    setAuthState(next);
+  }, []);
   const nav = useNavigate();
   const loc = useLocation();
   /** Server mode resolves asynchronously; callers that navigate afterwards await it (no sign-in page bounce). */
@@ -92,16 +102,23 @@ function AppRoutes() {
     });
     return unsub;
   }, [refresh]);
-  // Server mode: new notifications reach the bell and the badges without a reload (NTF-01), while the tab is visible.
+  // Server mode: every open screen, the bell and the badges pick up other people's changes without a reload (NTF-01),
+  // every 60 s while the tab is visible and at once when it becomes visible again. Screens not on display refetch when opened.
+  // ponytail: 60 s polling; server push (SSE/WebSocket) needs an ADR if minutes are too slow.
   const signedIn = Boolean(auth.user);
   useEffect(() => {
     if (BACKEND !== 'server' || !signedIn) return;
-    const t = setInterval(() => {
+    const sync = () => {
       if (document.visibilityState !== 'visible') return;
-      void queryClient.invalidateQueries({ queryKey: ['db', 'notifications'] });
+      void queryClient.invalidateQueries({ queryKey: ['db'] });
       void refresh();
-    }, 60_000);
-    return () => clearInterval(t);
+    };
+    const t = setInterval(sync, 60_000);
+    document.addEventListener('visibilitychange', sync);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', sync);
+    };
   }, [signedIn, refresh]);
   useEffect(() => {
     if (auth.user === null && 'expired' in auth && auth.expired) nav('/session-expired', { replace: true, state: { from: loc.pathname } });
@@ -112,13 +129,12 @@ function AppRoutes() {
     tick();
     const id = setInterval(() => {
       tick();
-      setAuth((a) => {
-        const next = resolveAuth();
-        return next.user?.id === a.user?.id && next.user?.role === a.user?.role ? a : next;
-      });
+      const next = resolveAuth();
+      if (next.user?.id !== signedInId.current) setAuth(next); // H4: another person; clears the cache
+      else setAuthState((a) => (next.user?.role === a.user?.role ? a : next));
     }, 30_000);
     return () => clearInterval(id);
-  }, []);
+  }, [setAuth]);
 
   const ctx = useMemo<AuthCtx | null>(() => {
     if (!auth.user) return null;

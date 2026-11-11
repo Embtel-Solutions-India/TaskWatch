@@ -35,6 +35,7 @@ import {
   acknowledgeTask,
   blockTask,
   cancelTask,
+  discardDraft,
   changeDue,
   completeTask,
   createTask,
@@ -120,7 +121,8 @@ const score = (error: string) => z.number({ error }).int({ error }).min(0, { err
 /** PERF (FRD §4): the giver's measures, shared by the task and recurring-schedule bodies. */
 export const measuredFields = {
     target: z.number({ error: 'Enter a target above 0.' }).positive({ error: 'Enter a target above 0.' }).nullable().default(null),
-    unit: z.string().trim().max(40, { error: 'Keep the unit under 40 characters.' }).default(''),
+    // null accepted: the recurring API answers `unit: null`, and the client sends that shape back.
+    unit: z.string().trim().max(40, { error: 'Keep the unit under 40 characters.' }).nullish().transform((v) => v ?? ''),
     estimatedHours: z.number({ error: 'Between 0.25 and 200 hours.' }).min(0.25, { error: 'Between 0.25 and 200 hours.' }).max(200, { error: 'Between 0.25 and 200 hours.' }).nullable().default(null),
     purpose: z.enum(['revenue', 'support'], { error: 'Choose revenue or support.' }).nullable().default(null),
 };
@@ -278,6 +280,12 @@ action(
 );
 action('reassign', z.object({ toId: z.number().int().optional(), reason: z.string().max(1000).default('') }).strict(), (req, id, b) => reassignTask(me(req).user, id, b));
 action('cancel', reasonOnly, (req, id, b) => cancelTask(me(req).user, id, b.reason));
+// D-133: a discarded draft is no longer visible, so this answers 204 instead of the task view.
+tasksRouter.post('/tasks/:id/discard', async (req, res) => {
+  empty.parse(req.body ?? {});
+  await discardDraft(me(req).user, idParam(req));
+  res.status(204).end();
+});
 action(
   'reopen',
   z.object({ reason: z.string().max(1000).default(''), dueDate: z.string().default(''), dueTime: z.string().regex(TIME).optional() }).strict(),

@@ -9,6 +9,7 @@
     "db:setup": "tsx --env-file-if-exists=../.env src/db/setup.ts",
     "db:migrate": "tsx --env-file-if-exists=../.env src/db/migrate.ts",
     "db:seed": "tsx --env-file-if-exists=../.env src/db/seed.ts",
+    "db:bootstrap": "tsx --env-file-if-exists=../.env src/db/bootstrap.ts",
     "test": "tsx --env-file-if-exists=../.env --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

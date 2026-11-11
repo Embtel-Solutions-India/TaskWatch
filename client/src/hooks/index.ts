@@ -102,6 +102,45 @@ export function useLocalState<T>(key: string, initial: T): [T, (v: T) => void] {
   return [v, set];
 }
 
+/**
+ * Masonry for a CSS grid with tiny `grid-auto-rows`: each item spans as many rows as its own height needs, so a short
+ * card no longer leaves a hole that the next card cannot use. Children with `display: contents` are looked through.
+ * Items must be `align-self: start` (their height must not depend on the span). Use as a callback ref.
+ */
+export function useMasonry() {
+  return useCallback((grid: HTMLElement | null) => {
+    if (!grid) return;
+    const items = () => [...grid.children].flatMap((c) => (getComputedStyle(c).display === 'contents' ? [...c.children] : [c])) as HTMLElement[];
+    const layout = () => {
+      const cs = getComputedStyle(grid);
+      const row = parseFloat(cs.gridAutoRows) || 1;
+      const gap = parseFloat(cs.columnGap) || 0; // the same gap vertically as between columns
+      for (const el of items()) el.style.gridRowEnd = `span ${Math.ceil((el.getBoundingClientRect().height + gap) / row)}`;
+    };
+    // ponytail: re-spans every item on any resize; fine for a dashboard's ~15 cards.
+    // Deferred to the next frame: changing spans inside the observer's own callback triggers the browser's
+    // "ResizeObserver loop completed with undelivered notifications" error (seen in the e2e run, 2026-11-11).
+    let frame = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(layout);
+    });
+    const watch = () => {
+      ro.disconnect();
+      ro.observe(grid);
+      items().forEach((el) => ro.observe(el));
+    };
+    const mo = new MutationObserver(watch);
+    mo.observe(grid, { childList: true, subtree: true });
+    watch();
+    return () => {
+      cancelAnimationFrame(frame);
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, []);
+}
+
 export function useMediaQuery(q: string): boolean {
   const [m, setM] = useState(() => typeof window !== 'undefined' && window.matchMedia(q).matches);
   useEffect(() => {

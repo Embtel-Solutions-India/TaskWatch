@@ -9,7 +9,7 @@ import { forbidden, invalid, notFound } from '../http/errors.js';
 import { can, canView, isOverseerOf } from './access.js';
 import { appendLog } from './activity.js';
 import { getDirectory, type DirUser } from './directory.js';
-import { act, guardText, lockTask, notifyUser, ref, storeAttachment, withCleanup, type PendingFile } from './tasks.js';
+import { act, guardText, insertComment, lockTask, notifyUser, ref, storeAttachment, withCleanup, type PendingFile } from './tasks.js';
 
 const LIMIT = 4000; // D-34
 
@@ -26,12 +26,9 @@ export async function addComment(actor: DirUser, taskId: number, input: { body: 
         const { rows } = await c.query('select parent_id from comments where id = $1 and task_id = $2 and deleted_at is null', [input.parentId, taskId]);
         if (!rows[0] || rows[0].parent_id !== null) throw invalid({ parentId: 'Reply to a comment on this task.' });
       }
-      const logId = await appendLog(c, { taskId, actorId: actor.id, kind: 'comment', body, after: input.parentId ? { parentId: input.parentId } : null });
-      const { rows } = await c.query<{ id: number }>(
-        `insert into comments (task_id, author_id, parent_id, body, created_at, log_id) values ($1,$2,$3,$4,$5,$6) returning id`,
-        [taskId, actor.id, input.parentId ?? null, body, now, logId],
-      );
-      id = rows[0]!.id;
+      const made = await insertComment(c, { taskId, actorId: actor.id, body, now, parentId: input.parentId });
+      const logId = made.logId;
+      id = made.id;
       for (const file of input.files ?? []) await storeAttachment(c, { taskId, logId, actor, file, now, context: 'comment', commentId: id, written });
       // Mentions: only people who can see the task; never the author (CMT-01-AC-3).
       const mentioned = dir.all().filter((u) => u.active && u.id !== actor.id && body.includes(`@${u.name}`) && canView(u, t, dir));

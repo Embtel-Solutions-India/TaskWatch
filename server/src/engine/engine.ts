@@ -27,7 +27,8 @@ const repeatEvery = (t: any, cfg: RulesConfig): number =>
 function repeatDue(e: ActiveEscalation, t: any, cfg: RulesConfig, now: Date): boolean {
   const every = repeatEvery(t, cfg);
   if (!every) return false;
-  if (e.snooze_until && now < e.snooze_until) return false;
+  if (e.snooze_until && now < e.snooze_until) return false; // the escalation was acknowledged
+  if (t.snooze_until && now < t.snooze_until) return false; // WF-01-AC-2: the assignee acknowledged the task
   return now.getTime() - e.last_alert_at.getTime() >= every;
 }
 
@@ -61,7 +62,7 @@ export async function runEngine(scope?: EngineScope): Promise<{ checked: number;
     }
   }
   const { rows: tasks } = await pool.query(
-    `select id, organization_id, entity_id, priority, status, due_at, clock_started_at, level, title, assignee_id, assigner_id
+    `select id, organization_id, entity_id, priority, status, due_at, clock_started_at, level, title, assignee_id, assigner_id, snooze_until
        from tasks t where ${where.join(' and ')}`,
     params,
   );

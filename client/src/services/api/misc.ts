@@ -3,6 +3,7 @@ import type { Db, Notification, NotificationPrefs, Status, Task, User } from '..
 import { ApiError, canViewUser, hasPerm, reportsOf } from '../authz/permissions';
 import { buildReport, reportCsv, type Report, type ReportFilters, type ReportId } from '@taskwatch/shared/reports';
 import { downloadCsv } from '../../utils/format';
+import { needsManager } from '@taskwatch/shared/permissions';
 import { buildDashboard, buildTeamOverview, layoutFor, type DashActivity, type DashboardExtras, type DashboardPayload, type DashTask, type Range, type TeamOverview } from '@taskwatch/shared/insights';
 import { departmentOf } from '../../features/dashboard/insights';
 import { audit, foundersOffice, ms } from '../core';
@@ -339,7 +340,7 @@ export async function getDashboard(range: Range, entity: string): Promise<Dashbo
 
     if (layout === 'executive') {
       const active = staff.filter((u) => u.status === 'active');
-      extra.staff = { active: active.length, inactive: staff.length - active.length, noManager: staff.filter((u) => !u.managerId && u.role !== 'cos').length };
+      extra.staff = { active: active.length, inactive: staff.length - active.length, noManager: staff.filter((u) => needsManager({ managerId: u.managerId, roles: [u.role] })).length };
       extra.staffByRole = Object.fromEntries((['ceo', 'cos', 'manager', 'lead', 'staff'] as const).map((r) => [r, active.filter((u) => u.role === r).length]));
       extra.orgMini = db.departments
         .filter((d) => inEntity(d.id))

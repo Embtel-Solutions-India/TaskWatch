@@ -10,6 +10,7 @@ import pg from 'pg';
 
 process.env.NODE_ENV = 'test';
 process.env.ALLOW_DEV_LOGIN = 'true'; // the suite signs in through the dev login
+delete process.env.DEMO_TOOLS; // D-47 default (off); the demo-clock tests switch it on themselves
 {
   const fallback = new URL(process.env.DATABASE_URL ?? 'postgres://localhost:5432/taskwatch');
   fallback.pathname = '/taskwatch_test';
@@ -55,6 +56,12 @@ let server: ReturnType<ReturnType<typeof createApp>['listen']>;
 /** Expected-value queries: open work = not closed and not a draft (ADR-0003, T-4.0). */
 const OPEN = `status not in ('completed', 'cancelled', 'draft')`;
 const U = { ceo: 1, cos: 2, mgrA: 3, leadA: 4, staffA1: 5, staffA2: 6, mgrB: 7, leadB: 8, staffB1: 9 };
+/** Test data only: put a fixture person back on their original line and out of any department (D-130 re-places movers). */
+async function restoreLine(id: number, managerId: number) {
+  await pool.query('update users set manager_id = $2, team_id = null where id = $1', [id, managerId]);
+  invalidateDirectory();
+}
+
 /** Test data only: forget organization 1's saved role matrix, so the shared defaults apply again. */
 async function resetRoleMatrix() {
   await pool.query('delete from role_permissions where organization_id = 1');
@@ -1315,7 +1322,6 @@ describe('Create and edit people (T-3.4; STAFF-02, STAFF-05, D-75, D-99)', () =>
     title: 'Analyst',
     roles: ['staff'],
     entityId: 'BAIS',
-    managerId: U.leadA,
     teamId: null,
     location: '',
     phone: null,
@@ -1331,7 +1337,6 @@ describe('Create and edit people (T-3.4; STAFF-02, STAFF-05, D-75, D-99)', () =>
     title: r.title,
     roles: r.roles,
     entityId: r.entityId,
-    managerId: r.managerId,
     teamId: r.teamId,
     location: r.location,
     phone: r.phone,
@@ -1351,10 +1356,10 @@ describe('Create and edit people (T-3.4; STAFF-02, STAFF-05, D-75, D-99)', () =>
     assert.deepEqual(await fields({ whatsapp: '12345' }), { whatsapp: 'Use international format, e.g. +14155550123.' });
     assert.deepEqual(await fields({ whatsappOptIn: true }), { whatsappOptIn: 'Add a WhatsApp number before opting in.' });
     assert.deepEqual(await fields({ timezone: 'Mars/Base' }), { timezone: 'Unknown time zone' });
-    assert.deepEqual(await fields({ entityId: 'NOPE' }), { entityId: 'Choose an entity.' });
-    assert.deepEqual(await fields({ managerId: 999999 }), { managerId: 'Manager not found.' });
+    assert.deepEqual(await fields({ entityId: 'NOPE' }), { entityId: 'Choose a vertical.' });
+    assert.equal((await cos.post('/api/people', { ...body(), managerId: U.leadA })).status, 422, 'ADR-0011: no managerId; the line is automatic');
     const { rows } = await pool.query(`insert into teams (name, entity_id, organization_id) values ('Embtel team', 'EMB', 1) returning id`);
-    assert.deepEqual(await fields({ teamId: rows[0].id }), { teamId: 'Choose a team in this entity.' });
+    assert.deepEqual(await fields({ teamId: rows[0].id }), { teamId: 'Choose a department in this vertical.' });
     assert.equal((await cos.post('/api/people', { ...body(), isAdmin: true })).status, 422, 'unknown fields are refused');
   });
 
@@ -1396,14 +1401,13 @@ describe('Create and edit people (T-3.4; STAFF-02, STAFF-05, D-75, D-99)', () =>
     }
   });
 
-  it('a manager change that would loop is refused; role changes are audited with before and after', async () => {
+  it('D-130: a new person is placed automatically (no department, no general manager: the CoS); role changes are audited', async () => {
     const cos = await as(U.cos);
-    const lead = inputOf(await row(U.leadA));
-    assert.deepEqual((await cos.put(`/api/people/${U.leadA}`, { ...lead, managerId: U.staffA1 })).body.fields, { managerId: 'That would create a reporting loop.' });
     const id = (await cos.post('/api/people', body({ email: 'two.roles@example.com' }))).body.id;
     assert.equal((await cos.put(`/api/people/${id}`, { ...inputOf(await row(id)), roles: ['lead', 'staff'] })).status, 200);
     const { rows } = await pool.query(`select before, after from admin_log where target = $1 and kind = 'staff.role_changed'`, [`user:${id}`]);
     assert.deepEqual(rows, [{ before: { roles: ['staff'] }, after: { roles: ['lead', 'staff'] } }]);
+    assert.equal((await row(id)).managerId, U.cos, 'BAIS has no general manager in the fixture');
   });
 
   it("STAFF-05-AC-1 / STAFF-02-AC-6: two roles give exactly the union, on the person's next request", async () => {
@@ -1445,6 +1449,7 @@ describe('Activate and deactivate (T-3.5; STAFF-03)', () => {
     } finally {
       assert.equal((await cos.post(`/api/people/${U.staffA2}/status`, { status: 'active' })).status, 200);
       sessions.delete(U.staffA2); // that cached session was ended; later tests sign in afresh
+      await restoreLine(U.staffA2, U.leadA); // D-130 re-placed them; later tests use the fixture line
     }
     const { rows: back } = await pool.query('select active, archived_at from users where id = $1', [U.staffA2]);
     assert.deepEqual(back, [{ active: true, archived_at: null }]);
@@ -1487,36 +1492,112 @@ describe('Organisation view and placement (T-3.6; ORG-01, ORG-02)', () => {
     assert.ok(!lead.people.some((p: { id: number }) => p.id === U.staffB1), 'not another line');
   });
 
-  it('ORG-02-AC-1/2: manager and team commit together or not at all; a loop is 409 with the person\'s name', async () => {
+  it('ORG-02 / D-130: placement moves the department only, inside the vertical; the reporting line follows the department lead', async () => {
     const cos = await as(U.cos);
     const { rows: emb } = await pool.query(`insert into teams (name, entity_id, organization_id) values ('Embtel placement', 'EMB', 1) returning id`);
-    const bad = await cos.put(`/api/people/${U.staffA2}/placement`, { managerId: U.mgrB, teamId: emb[0].id });
-    assert.deepEqual({ s: bad.status, f: bad.body.fields }, { s: 422, f: { teamId: 'Choose a team in this entity.' } });
-    const { rows } = await pool.query('select manager_id from users where id = $1', [U.staffA2]);
-    assert.equal(rows[0].manager_id, U.leadA, 'AC-1: the manager change was rolled back');
-    const loop = await cos.put(`/api/people/${U.leadA}/placement`, { managerId: U.staffA1 });
-    assert.deepEqual({ s: loop.status, e: loop.body.error }, { s: 409, e: 'Lead A cannot report to someone in their own reporting line.' });
-    const moved = await cos.put(`/api/people/${U.staffA2}/placement`, { managerId: U.mgrA });
-    assert.equal(moved.body.managerId, U.mgrA);
-    await cos.put(`/api/people/${U.staffA2}/placement`, { managerId: U.leadA });
-    const { rows: audit } = await pool.query(`select before, after from admin_log where target = $1 and kind = 'staff.manager_changed' order by seq`, [`user:${U.staffA2}`]);
-    assert.deepEqual(audit.slice(-2), [
-      { before: { managerId: U.leadA }, after: { managerId: U.mgrA } },
-      { before: { managerId: U.mgrA }, after: { managerId: U.leadA } },
-    ]);
+    const bad = await cos.put(`/api/people/${U.staffA2}/placement`, { teamId: emb[0].id });
+    assert.deepEqual({ s: bad.status, f: bad.body.fields }, { s: 422, f: { teamId: 'Choose a department in this vertical.' } });
+    assert.equal((await cos.put(`/api/people/${U.staffA2}/placement`, { managerId: U.mgrA })).status, 422, 'no managerId');
+    const { rows: led } = await pool.query(`insert into teams (name, entity_id, lead_id, organization_id) values ('BAIS led', 'BAIS', $1, 1) returning id`, [U.leadA]);
+    try {
+      const moved = await cos.put(`/api/people/${U.staffA2}/placement`, { teamId: led[0].id });
+      assert.deepEqual([moved.body.teamId, moved.body.managerId], [led[0].id, U.leadA], 'reports to the department lead');
+      const { rows: audit } = await pool.query(`select kind from admin_log where target = $1 order by seq desc limit 1`, [`user:${U.staffA2}`]);
+      assert.equal(audit[0].kind, 'staff.team_changed', 'the line was already the lead: no manager change to audit');
+    } finally {
+      await restoreLine(U.staffA2, U.leadA);
+    }
   });
 
   it('ORG-02-AC-3: a manager with manage_team moves a report between teams, but nobody outside the line and no reporting lines', async () => {
-    const { rows } = await pool.query(`insert into teams (name, entity_id, organization_id) values ('BAIS one', 'BAIS', 1), ('BAIS two', 'BAIS', 1) returning id`);
+    // ADR-0011: departments led by Lead A, so moving Staff A1 between them keeps them in Manager A's line (D-130).
+    const { rows } = await pool.query(`insert into teams (name, entity_id, lead_id, organization_id) values ('BAIS one', 'BAIS', $1, 1), ('BAIS two', 'BAIS', $1, 1) returning id`, [U.leadA]);
     const mgr = await as(U.mgrA);
     try {
       assert.equal((await mgr.put(`/api/people/${U.staffA1}/placement`, { teamId: rows[0].id })).body.teamId, rows[0].id);
       assert.equal((await mgr.put(`/api/people/${U.staffA1}/placement`, { teamId: rows[1].id })).body.teamId, rows[1].id);
-      assert.deepEqual((await mgr.put(`/api/people/${U.staffB1}/placement`, { teamId: rows[0].id })).body, { error: 'You cannot move this person between teams.' });
-      assert.deepEqual((await mgr.put(`/api/people/${U.staffA1}/placement`, { managerId: U.mgrA })).body, { error: "You don't have permission to change reporting lines." });
+      assert.deepEqual((await mgr.put(`/api/people/${U.staffB1}/placement`, { teamId: rows[0].id })).body, { error: 'You cannot move this person between departments.' });
+      assert.equal((await mgr.put(`/api/people/${U.staffA1}/placement`, { managerId: U.mgrA })).status, 422, 'no managerId');
     } finally {
-      await (await as(U.cos)).put(`/api/people/${U.staffA1}/placement`, { teamId: null });
+      await restoreLine(U.staffA1, U.leadA);
     }
+  });
+});
+
+describe('Verticals and departments (ADR-0011; D-129…D-131)', () => {
+  const person = (email: string, roles: string[], entityId: string, teamId: number | null = null) => ({ name: `Test ${email.split('@')[0]}`, email, title: 'Test', roles, entityId, teamId });
+  const line = async (id: number) => (await pool.query('select manager_id, entity_id, team_id from users where id = $1', [id])).rows[0];
+
+  it('only manage_staff manages verticals; codes and names are checked; a general manager needs the Manager role', async () => {
+    const cos = await as(U.cos);
+    assert.equal((await (await as(U.mgrA)).post('/api/entities', { id: 'NOPE', name: 'Nope' })).status, 403);
+    assert.deepEqual((await cos.post('/api/entities', { id: 'b', name: 'Bad code' })).body.fields, { id: 'Use 2–10 capital letters or digits, e.g. BAIS.' });
+    assert.deepEqual((await cos.post('/api/entities', { id: 'BAIS', name: 'Taken' })).body.fields, { id: 'This code or name is already in use.' });
+    assert.deepEqual((await cos.post('/api/entities', { id: 'VX', name: 'Vertical X', headId: U.staffB1 })).body.fields, { headId: 'Choose someone with the Manager role.' });
+    assert.equal((await cos.post('/api/entities', { id: 'VX', name: 'Vertical X', extra: 1 })).status, 422, 'unknown fields are refused');
+  });
+
+  it('D-130 end to end: GM → CoS, lead → GM, member → lead, else GM, else CoS; changes follow the structure and are audited', async () => {
+    const cos = await as(U.cos);
+    assert.equal((await cos.post('/api/entities', { id: 'TV', name: 'Test Vertical' })).status, 201);
+    const gm = (await cos.post('/api/people', person('tv.gm@example.com', ['manager'], 'TV'))).body.id;
+    const lead = (await cos.post('/api/people', person('tv.lead@example.com', ['lead'], 'TV'))).body.id;
+    assert.equal((await line(gm)).manager_id, U.cos, 'no GM yet: the CoS');
+    assert.equal((await cos.put('/api/entities/TV', { name: 'Test Vertical', headId: gm })).status, 204);
+    const sales = (await cos.post('/api/teams', { entityId: 'TV', name: 'Sales', leadId: lead })).body.id;
+    const marketing = (await cos.post('/api/teams', { entityId: 'TV', name: 'Marketing' })).body.id;
+    assert.deepEqual((await cos.post('/api/teams', { entityId: 'TV', name: 'sales' })).body.fields, { name: 'This vertical already has a department with this name.' });
+    const seller = (await cos.post('/api/people', person('tv.seller@example.com', ['staff'], 'TV', sales))).body.id;
+    const marketer = (await cos.post('/api/people', person('tv.marketer@example.com', ['staff'], 'TV', marketing))).body.id;
+    assert.deepEqual(
+      [(await line(gm)).manager_id, (await line(lead)).manager_id, (await line(seller)).manager_id, (await line(marketer)).manager_id],
+      [U.cos, gm, lead, gm],
+      'GM → CoS, lead → GM, member → lead, member without a lead → GM',
+    );
+    // The GM sees the whole vertical through the line.
+    const seen = (await (await as(gm)).get('/api/people')).body.items.map((p: { id: number }) => p.id);
+    assert.ok([lead, seller, marketer].every((id) => seen.includes(id)), 'the general manager sees the vertical');
+    // The department loses its lead: its people move to the GM. The vertical loses its GM: everyone to the CoS.
+    assert.equal((await cos.put(`/api/teams/${sales}`, { name: 'Sales', leadId: null })).status, 204);
+    assert.equal((await line(seller)).manager_id, gm);
+    assert.equal((await cos.put('/api/entities/TV', { name: 'Test Vertical', headId: null })).status, 204);
+    assert.deepEqual([(await line(seller)).manager_id, (await line(marketer)).manager_id, (await line(lead)).manager_id], [U.cos, U.cos, U.cos]);
+    const { rows: audit } = await pool.query(`select after from admin_log where kind = 'staff.manager_changed' and target = $1 order by seq desc limit 1`, [`user:${seller}`]);
+    assert.deepEqual(audit[0].after, { managerId: U.cos, automatic: true });
+    // Never deleted: a department or vertical with active people cannot be archived.
+    assert.equal((await cos.post(`/api/teams/${marketing}/archive`)).status, 409);
+    assert.equal((await cos.post('/api/entities/TV/archive')).status, 409);
+    for (const id of [gm, lead, seller, marketer]) await cos.post(`/api/people/${id}/status`, { status: 'inactive' });
+    assert.equal((await cos.post(`/api/teams/${marketing}/archive`)).status, 204);
+    assert.equal((await cos.post('/api/teams', { entityId: 'TV', name: 'Marketing' })).status, 201, 'review fix #6: an archived name is free again');
+    // The vertical is archived next, so its new department goes with it.
+    assert.equal((await cos.post('/api/entities/TV/archive')).status, 204);
+    assert.ok(!(await cos.get('/api/entities')).body.some((e: { id: string }) => e.id === 'TV'), 'archived verticals leave the pickers');
+  });
+});
+
+describe('Review fixes 2026-11-11: no stale posts, no reporting loops', () => {
+  it('#1/#2: a lead moved to another department leaves the old one; swapping two leads never loops', async () => {
+    const cos = await as(U.cos);
+    assert.equal((await cos.post('/api/entities', { id: 'LV', name: 'Loop Vertical' })).status, 201);
+    const mk = async (email: string, roles: string[]) => (await cos.post('/api/people', { name: `Test ${email.split('@')[0]}`, email, title: 'Test', roles, entityId: 'LV' })).body.id;
+    const a = await mk('lv.a@example.com', ['lead']);
+    const b = await mk('lv.b@example.com', ['lead']);
+    const t1 = (await cos.post('/api/teams', { entityId: 'LV', name: 'One', leadId: a })).body.id;
+    const t2 = (await cos.post('/api/teams', { entityId: 'LV', name: 'Two', leadId: b })).body.id;
+    const member = (await cos.post('/api/people', { name: 'Test Member', email: 'lv.m@example.com', title: 'Test', roles: ['staff'], entityId: 'LV', teamId: t1 })).body.id;
+    const mgr = async (id: number) => (await pool.query('select manager_id from users where id = $1', [id])).rows[0].manager_id;
+    const lead = async (t: number) => (await pool.query('select lead_id from teams where id = $1', [t])).rows[0].lead_id;
+    assert.equal(await mgr(member), a);
+    // A moves into Two: One loses its lead, its member is re-placed (no GM: the CoS), A reports to B.
+    assert.equal((await cos.put(`/api/people/${a}/placement`, { teamId: t2 })).status, 200);
+    assert.deepEqual([await lead(t1), await mgr(member), await mgr(a)], [null, U.cos, b]);
+    // B moves into One: B now leads nothing there, so B reports to the CoS, and A (still in Two, which lost B) too.
+    assert.equal((await cos.put(`/api/people/${b}/placement`, { teamId: t1 })).status, 200);
+    assert.deepEqual([await lead(t2), await mgr(b), await mgr(a)], [null, U.cos, U.cos], 'no A↔B loop');
+    // Making A the lead of One takes nothing stale along: B (in One) now reports to A.
+    assert.equal((await cos.put(`/api/teams/${t1}`, { name: 'One', leadId: a })).status, 204);
+    assert.deepEqual([await mgr(a), await mgr(b)], [U.cos, a]);
   });
 });
 
@@ -1538,7 +1619,7 @@ describe('System settings (T-3.7; SET-01)', () => {
 
   it('SET-01-AC-4: everyone reads the public subset; manage_system_settings reads everything; writing needs it', async () => {
     const staff = (await (await as(U.staffA1)).get('/api/settings')).body;
-    assert.deepEqual(Object.keys(staff).sort(), ['categories', 'orgName', 'overloadThreshold', 'timezone', 'workdayEnd', 'workdayStart']);
+    assert.deepEqual(Object.keys(staff).sort(), ['categories', 'orgName', 'overloadThreshold', 'standardTasks', 'timezone', 'workdayEnd', 'workdayStart']);
     const full = (await (await as(U.cos)).get('/api/settings')).body;
     assert.equal(full.retentionYears, 7);
     assert.equal(full.orgName, 'Vertical', 'KI-23: the organization\'s own name');
@@ -1557,6 +1638,31 @@ describe('System settings (T-3.7; SET-01)', () => {
     assert.deepEqual(await fields({ workdayStart: '9am' }), { workdayStart: 'Use HH:MM (24-hour)' });
     assert.deepEqual(await fields({ workdayStart: '18:00', workdayEnd: '09:00' }), { workdayEnd: 'The workday must end after it starts.' });
     assert.deepEqual(await fields({ categories: [' ', ''] }), { categories: 'Keep at least one category.' });
+    assert.deepEqual(await fields({ priorityWeights: { critical: 0, high: 1, normal: 1, low: 11 } }), { 'priorityWeights.critical': 'Between 1 and 10.', 'priorityWeights.low': 'Between 1 and 10.' });
+    assert.equal((await cos.put('/api/settings', { ...valid(), priorityWeights: { critical: 2, high: 1, normal: 1, low: 1, urgent: 5 } })).status, 422, 'unknown priority');
+  });
+
+  it('D-124: priority weights are saved, audited, shown on the leaderboard and kept when a save leaves them out', async () => {
+    const cos = await as(U.cos);
+    // Test data: users start without a team, so Lead A joins a fresh one for the leaderboard check. Restored afterwards.
+    const { rows: was } = await pool.query('select team_id from users where id = $1', [U.leadA]);
+    const { rows: made } = await pool.query(`insert into teams (name, entity_id, organization_id) values ('Weights A', 'BAIS', 1) returning id`);
+    await pool.query('update users set team_id = $1 where id = $2', [made[0].id, U.leadA]);
+    invalidateDirectory();
+    try {
+      const w = { critical: 3, high: 2, normal: 1, low: 1 };
+      assert.deepEqual((await cos.put('/api/settings', { ...valid(), priorityWeights: w })).body.priorityWeights, w);
+      const { rows } = await pool.query(`select after from admin_log where kind = 'settings.updated' order by seq desc limit 1`);
+      assert.deepEqual(rows[0].after.priorityWeights, w, 'audited (the save body also changes categories)');
+      assert.deepEqual((await cos.put('/api/settings', valid())).body.priorityWeights, w, 'left out: unchanged');
+      const board = (await (await as(U.leadA)).get(`/api/performance/leaderboard?teamId=${made[0].id}&period=month`)).body;
+      assert.deepEqual(board.weights, w, `visible on the leaderboard: ${JSON.stringify(board).slice(0, 200)}`);
+      for (const r of board.rows) assert.equal(r.score, r.outcome, 'ranked on the Outcome Score only');
+    } finally {
+      await pool.query(`update organizations set name = 'Vertical', settings = '{}' where id = 1`); // test data only
+      await pool.query('update users set team_id = $2 where id = $1', [U.leadA, was[0].team_id]);
+      invalidateDirectory();
+    }
   });
 
   it('SET-01-AC-2/5: retention stays 7, categories are trimmed and de-duplicated, the name is the organization\'s, and only changed keys are audited', async () => {
@@ -1634,7 +1740,7 @@ describe('Task lists, actions and pickers (T-4.1; TASK-04, TASK-08, WF-10)', () 
     for (const a of ['reassign', 'cancel', 'edit']) assert.ok(manager.includes(a), `manager: ${a}`);
     assert.ok(!manager.includes('progress'), 'only the assignee posts progress');
     const lead = await actionsFor(U.leadA);
-    assert.ok(!lead.includes('reassign'), 'D-29: leads lack reassign_tasks by default');
+    assert.ok(lead.includes('reassign'), 'D-133: the giver reassigns their own task (D-29 still holds for tasks they did not give: see "reassigning restarts the clock")');
   });
 
   it('TC-TASK-08-01: assignee options are the assignable people with their load; parents are visible tasks only', async () => {
@@ -1694,6 +1800,25 @@ describe('Create, draft, publish, edit (T-4.3, T-4.4; TASK-01…03, EXT-04)', ()
     assert.deepEqual(rows.map((r) => r.kind), ['created', 'assigned']);
     const { rows: n } = await pool.query(`select count(*)::int n from notifications where task_id = $1 and user_id = $2 and channel = 'inapp'`, [t.id, U.staffA1]);
     assert.equal(n[0].n, 1, 'TASK-01-AC-2');
+  });
+
+  it('D-133: the giver discards a draft; it vanishes for everyone, stays in the database, and is audited; assigned tasks cannot be discarded', async () => {
+    const lead = await as(U.leadA);
+    const d = (await lead.post('/api/tasks', { ...body({ title: 'Draft to discard' }), draft: true })).body.task;
+    assert.ok(d.actions.includes('discard'), 'the giver is offered Delete');
+    assert.equal((await (await as(U.mgrA)).post(`/api/tasks/${d.id}/discard`, {})).status, 403, 'an overseer is not the giver');
+    assert.equal((await lead.post(`/api/tasks/${d.id}/discard`, { reason: 'x' })).status, 422, 'no body');
+    assert.equal((await lead.post(`/api/tasks/${d.id}/discard`, {})).status, 204);
+    assert.equal((await lead.get(`/api/tasks/${d.id}`)).status, 404, 'gone from the detail page');
+    assert.ok(!(await lead.get('/api/tasks?scope=assigned_by_me')).body.items.some((t: { id: number }) => t.id === d.id), 'gone from lists');
+    assert.equal((await (await as(U.cos)).get(`/api/tasks/${d.id}`)).status, 404, 'gone for the Founder\'s Office too');
+    const { rows } = await pool.query('select discarded_at is not null as discarded from tasks where id = $1', [d.id]);
+    assert.deepEqual(rows, [{ discarded: true }], 'kept in the database (never deleted)');
+    const { rows: audit } = await pool.query(`select kind from admin_log where target = $1`, [`task:${d.id}`]);
+    assert.deepEqual(audit.map((a) => a.kind), ['task.draft_discarded']);
+    const live = (await lead.post('/api/tasks', body({ title: 'Assigned, not discardable' }))).body.task;
+    assert.ok(!live.actions.includes('discard'));
+    assert.equal((await lead.post(`/api/tasks/${live.id}/discard`, {})).status, 403, 'an assigned task is cancelled, not discarded');
   });
 
   it('TASK-02: a draft has no assignment, notification or clock; publishing assigns it now; a past due date blocks publishing', async () => {
@@ -2079,7 +2204,7 @@ describe('Escalation engine on the new model (T-5.1–T-5.3; ESC-01…06a, D-24,
     const { rows } = await pool.query(`select level, reason from escalations where task_id = $1 and cleared_at is null order by level`, [t.id]);
     assert.deepEqual(rows.map((r) => [r.level, r.reason]), [[1, 'overdue'], [2, 'overdue']]);
     const v = (await staff.get(`/api/tasks/${t.id}`)).body.task;
-    assert.deepEqual([v.status, v.level, v.overdue], ['submitted', 2, true]);
+    assert.deepEqual([v.status, v.level, v.overdue], ['submitted', 2, false], 'the floor climbs, but in review is never "overdue" (H3, DASHBOARD-FRD §1.1)');
   });
 
   it('ESC-03-AC-2 / BR-25: a jump fires L1 and L2 together, each stamped with its own crossing time', async () => {
@@ -2300,7 +2425,9 @@ describe('Notifications (Phase 6: T-6.1–T-6.4)', () => {
 
   it('D-105: a personal quiet window overrides the organization’s, in the person’s zone', async () => {
     const cos = await as(U.cos);
-    const body = { name: 'Night Shift', email: 'night.shift@example.com', title: 'Analyst', roles: ['staff'], entityId: 'BAIS', managerId: U.leadA, timezone: 'Asia/Kolkata' };
+    // ADR-0011: in a department led by Lead A, so the person reports to Lead A and Lead A may assign them (D-130).
+    const { rows: dept } = await pool.query(`insert into teams (name, entity_id, lead_id, organization_id) values ('BAIS night', 'BAIS', $1, 1) returning id`, [U.leadA]);
+    const body = { name: 'Night Shift', email: 'night.shift@example.com', title: 'Analyst', roles: ['staff'], entityId: 'BAIS', teamId: dept[0].id, timezone: 'Asia/Kolkata' };
     assert.deepEqual((await cos.post('/api/people', { ...body, quietStart: '08:00' })).body.fields, { quietEnd: 'Set both quiet-hours times, or neither.' });
     assert.deepEqual((await cos.post('/api/people', { ...body, quietStart: '8am', quietEnd: '20:00' })).body.fields, { quietStart: 'Use HH:MM (24-hour)' });
     const pid = (await cos.post('/api/people', { ...body, quietStart: '08:00', quietEnd: '20:00' })).body.id;
@@ -2447,6 +2574,69 @@ describe('Performance (PERF): measured tasks, ratings, scores, workload', () => 
     assert.deepEqual((await staff.post(`/api/tasks/${plain}/progress`, { message: 'Draft half done', achieved: 3 })).body.fields, { achieved: 'This task has no target to report against.' });
   });
 
+  it('Leaderboard analytics: 8-week trend for the team; a team comparison only for viewers who see several teams; 404 outside scope', async () => {
+    // Test data: two fresh teams (users start without one); Lead A and Staff A1 join the first. Restored afterwards.
+    const { rows: before } = await pool.query('select id, team_id from users where id = any($1)', [[U.leadA, U.staffA1]]);
+    const { rows: made } = await pool.query(`insert into teams (name, entity_id, organization_id) values ('Analytics A', 'BAIS', 1), ('Analytics B', 'BAIS', 1) returning id`);
+    const [teamA, teamB] = made.map((t) => t.id);
+    await pool.query('update users set team_id = $1 where id = any($2)', [teamA, [U.leadA, U.staffA1]]);
+    invalidateDirectory();
+    try {
+      const lead = (await (await as(U.leadA)).get(`/api/performance/analytics?teamId=${teamA}&period=month`)).body;
+      assert.equal(lead.trend.length, 8, JSON.stringify(lead));
+      assert.ok(lead.trend.every((w: any) => 'average' in w && typeof w.scored === 'number' && new Date(w.from) < new Date(w.to)));
+      // The comparison appears only for viewers who may open more than one team board (D-117 / D-128). Other tests can
+      // leave Lead A with reports in a second department, so the expectation follows the lead's own team list.
+      const leadTeams = (await (await as(U.leadA)).get('/api/performance/teams')).body.map((t: { id: number }) => t.id).sort();
+      assert.deepEqual(lead.teams.map((t: { id: number }) => t.id).sort(), leadTeams.length > 1 ? leadTeams : [], 'comparison only across the teams the lead may see');
+      const cos = (await (await as(U.cos)).get(`/api/performance/analytics?teamId=${teamA}&period=month`)).body;
+      assert.ok(cos.teams.length > 1, 'the Founder\'s Office compares every team');
+      const avgs = cos.teams.map((t: any) => t.average ?? -1);
+      assert.deepEqual(avgs, [...avgs].sort((a: number, b: number) => b - a), 'best average first');
+      assert.equal((await (await as(U.staffA1)).get(`/api/performance/analytics?teamId=${teamB}&period=month`)).status, 404, 'another team');
+    } finally {
+      for (const r of before) await pool.query('update users set team_id = $2 where id = $1', [r.id, r.team_id]); // test data only
+      invalidateDirectory();
+    }
+  });
+
+  it('D-125: over the standard working time needs a reason, posted as a comment; the reviewer sees worked vs standard', async () => {
+    const { rows: who } = await pool.query('select time_zone, quiet_start, quiet_end from users where id = $1', [U.staffA1]);
+    assert.equal(who[0].quiet_start, null, 'this check uses the organization workday');
+    // Monday 10:00 in the assignee's zone: inside the 09:00–18:00 workday.
+    const monday = DateTime.fromJSDate(now, { zone: who[0].time_zone }).plus({ weeks: 1 }).startOf('week').set({ hour: 10 });
+    setNow(monday.toJSDate());
+    const lead = await as(U.leadA);
+    const staff = await as(U.staffA1);
+    const id = (await lead.post('/api/tasks', measured({ title: 'Overtime check', estimatedHours: 1, ...due(localIn(48, IST)) }))).body.task.id;
+    advance(2 * H);
+    assert.deepEqual((await staff.get(`/api/tasks/${id}`)).body.time, { worked: 2, standard: 1 });
+    assert.deepEqual((await staff.post(`/api/tasks/${id}/complete`, { achieved: 150 })).body.fields, {
+      shortfallReason: 'Took 2.0 working hours against a 1 h standard: explain the delay.',
+    });
+    assert.equal((await staff.post(`/api/tasks/${id}/complete`, { achieved: 150, shortfallReason: 'Client changed the list twice' })).status, 200);
+    const d = (await lead.get(`/api/tasks/${id}`)).body;
+    assert.deepEqual(d.time, { worked: 2, standard: 1 }, 'frozen at completion');
+    assert.ok(d.comments.some((c: { body: string }) => c.body === 'Reason for delay or shortfall: Client changed the list twice'), 'posted in the task chat');
+    // Within the standard: no reason asked.
+    const quick = (await lead.post('/api/tasks', measured({ title: 'Quick check', estimatedHours: 3, ...due(localIn(48, IST)) }))).body.task.id;
+    advance(H);
+    assert.equal((await staff.post(`/api/tasks/${quick}/complete`, { achieved: 150 })).status, 200);
+    // Waiting in review is the reviewer's time: 1 h work, 3 h in review, 0.5 h rework → 1.5 h worked.
+    setNow(monday.plus({ days: 1 }).toJSDate());
+    const reviewed = (await lead.post('/api/tasks', measured({ title: 'Reviewed overtime check', estimatedHours: 2, reviewRequired: true, ...due(localIn(48, IST)) }))).body.task.id;
+    assert.equal((await staff.post(`/api/tasks/${reviewed}/start`)).status, 200, 'submit needs In progress');
+    advance(H);
+    assert.equal((await staff.post(`/api/tasks/${reviewed}/submit`, { note: 'First draft ready', achieved: 150 })).status, 200);
+    advance(3 * H);
+    assert.equal((await lead.post(`/api/tasks/${reviewed}/review`, { decision: 'changes_requested', comment: 'Add the summary' })).status, 200);
+    advance(30 * MIN);
+    assert.deepEqual((await staff.get(`/api/tasks/${reviewed}`)).body.time, { worked: 1.5, standard: 2 });
+    // A cancelled task shows no running clock.
+    assert.equal((await lead.post(`/api/tasks/${reviewed}/cancel`, { reason: 'No longer needed' })).status, 200);
+    assert.equal((await lead.get(`/api/tasks/${reviewed}`)).body.time, null);
+  });
+
   it('PERF Task 4: approving a review needs a quality score (and an outcome score without a target)', async () => {
     const lead = await as(U.leadA);
     const staff = await as(U.staffA1);
@@ -2507,7 +2697,7 @@ describe('Performance (PERF): measured tasks, ratings, scores, workload', () => 
     const q = `period=custom&from=${range(-1)}&to=${range(5)}`;
     const board = await lead.get(`/api/performance/leaderboard?teamId=${teamA}&${q}`);
     assert.equal(board.status, 200, JSON.stringify(board.body));
-    assert.deepEqual(board.body.weights, { outcome: 0.5, timeliness: 0.2, quality: 0.3 });
+    assert.deepEqual(board.body.weights, { critical: 1, high: 1, normal: 1, low: 1 }, 'D-124: priority weights, equal by default');
     const row = board.body.rows.find((r: any) => r.userId === U.staffA2);
     assert.deepEqual([row.outcome, row.timeliness, row.quality, row.score, row.eligible, row.rank], [100, 100, null, 100, 5, 1]);
     assert.ok(row.flags.includes('no_quality_reviews'));
@@ -2601,5 +2791,60 @@ describe('Demo clock (T-10.1; DEMO-01, D-17, D-47)', () => {
       (cfg as { demoTools: boolean }).demoTools = false;
       (await import('../src/clock.js')).setOffsetMs(0);
     }
+  });
+});
+
+describe('Review fixes 2026-11-07 (H1, H2, H3, H5)', () => {
+  it('H1 / SEC-9: placement needs a placement permission even with nothing to change, and a team move returns no contact details', async () => {
+    const empty = await (await as(U.staffA1)).put(`/api/people/${U.cos}/placement`, {});
+    assert.deepEqual([empty.status, empty.body], [403, { error: 'You cannot move this person between departments.' }], 'an empty body is no free read');
+    const { rows } = await pool.query(`insert into teams (name, entity_id, organization_id) values ('BAIS H1', 'BAIS', 1) returning id`);
+    try {
+      const moved = await (await as(U.mgrA)).put(`/api/people/${U.staffA1}/placement`, { teamId: rows[0].id });
+      assert.equal(moved.status, 200);
+      for (const k of ['email', 'phone', 'whatsapp']) assert.ok(!(k in moved.body), `no ${k} without manage_staff`);
+    } finally {
+      await restoreLine(U.staffA1, U.leadA);
+    }
+  });
+
+  it('H2 / WF-01-AC-2: the assignee acknowledging the task pauses repeat alerts until snoozeUntil', async () => {
+    const start = now;
+    const id = await newTask(U.leadA, U.staffA2, 'critical', 100);
+    setNow(new Date(start.getTime() + 12 * H + MIN));
+    await runEngine();
+    assert.equal(await taskLevel(id), 3);
+    assert.equal((await (await as(U.staffA2)).post(`/api/tasks/${id}/acknowledge`)).status, 200);
+    const repeats = async () =>
+      (await pool.query(`select count(*)::int as n from notifications where task_id = $1 and event = 'repeat' and user_id = $2 and channel = 'inapp'`, [id, U.cos])).rows[0].n;
+    setNow(new Date(start.getTime() + 20 * H)); // two 4 h repeat periods after L3
+    await runEngine();
+    assert.equal(await repeats(), 0, 'no repeat while the task is acknowledged');
+    setNow(new Date(start.getTime() + 24 * H + 2 * MIN));
+    await runEngine();
+    assert.equal(await repeats(), 1, 'repeats resume after ackSnoozeHours');
+  });
+
+  it('H3 / DASHBOARD-FRD §1.1: a task in review is never overdue; an active one past due is', async () => {
+    const lead = await as(U.leadA);
+    const staff = await as(U.staffA1);
+    const mk = async (title: string) => (await lead.post('/api/tasks', { ...M, title, category: 'Operations', assigneeId: U.staffA1, priority: 'normal', ...due(localIn(2, 'Asia/Kolkata')), reviewRequired: true })).body.task.id as number;
+    const inReview = await mk('H3 in review');
+    const running = await mk('H3 running');
+    await staff.post(`/api/tasks/${inReview}/start`);
+    assert.equal((await staff.post(`/api/tasks/${inReview}/submit`, { note: 'Handed in for review' })).body.task.status, 'submitted');
+    advance(3 * H);
+    assert.equal((await lead.get(`/api/tasks/${inReview}`)).body.task.overdue, false, 'in review');
+    assert.equal((await lead.get(`/api/tasks/${running}`)).body.task.overdue, true, 'active and past due');
+  });
+
+  it('H5: a recurring schedule saves with unit: null, the shape the API itself answers', async () => {
+    const res = await (await as(U.leadA)).post('/api/recurring', {
+      title: 'H5 weekly check', category: 'Operations', priority: 'normal', assigneeId: U.staffA1, frequency: 'daily', interval: 1,
+      startDate: DateTime.fromJSDate(now, { zone: 'Asia/Kolkata' }).plus({ days: 1 }).toISODate(), dueHour: 17, ...M, target: null, unit: null,
+    });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    const { rows } = await pool.query('select unit from recurring_tasks where id = $1', [res.body.id]);
+    assert.ok(!rows[0].unit, 'no unit stored');
   });
 });

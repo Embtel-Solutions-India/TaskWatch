@@ -20,6 +20,7 @@ export function allowedActions(db: Db, user: User | null, task: Task): Set<TaskA
     isAssignee: task.assigneeId === user.id,
     isOverseer: isOverseer(db, user, task) && task.assigneeId !== user.id,
     isGiver: user.role === 'cos' || task.createdBy === user.id || task.assignedBy === user.id,
+    isCurrentGiver: user.role === 'cos' || task.assignedBy === user.id, // D-133
     can: (p) => hasPerm(db, user, p),
     pendingExtension: db.extensions.some((e) => e.taskId === task.id && e.status === 'pending'),
     // R-1: the "to" recipients of an active level, or a Chief of Staff. Copied (cc) people cannot.

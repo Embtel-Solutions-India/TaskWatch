@@ -106,7 +106,7 @@ Per task:
 - With a target: `min(achieved ÷ target × 100, 100)` at completion, or at the due date if still open.
 - Without a target: `outcomeScore` (the reviewer's/task giver's 0–100). Completed without any score: **excluded from O and shown as "outcome not rated"**. [CALL]
 
-Per person: **plain average** over eligible tasks (all tasks weigh the same) [OWNER]. Tasks with an **accepted shortfall** are excluded from the denominator [OWNER].
+Per person: **weighted average** `O = Σ(task outcome × weight) ÷ Σ(weight)`; the weight comes from the task's priority, set in Settings (1–10, default 1 = all tasks weigh the same) and printed with every score [OWNER, D-124, 2026-11-11; was a plain average]. Tasks with an **accepted shortfall** are excluded from the denominator [OWNER].
 
 **Whose task it is** [CALL]: a task scores for the person assigned **when it was completed** (or on its due date, if still open then). If it was reassigned **after** its due date had already passed, it is excluded from the new assignee's Timeliness (they inherited a late task) but counts in their Outcome and Quality.
 
@@ -121,13 +121,13 @@ Per person: **plain average** over eligible tasks (all tasks weigh the same) [OW
 ### 5.5 Quality Q (0–100) [OWNER formula]
 `Q = average qualityScore of eligible tasks that were reviewed`. Unreviewed tasks are **pending review**, never 100 [OWNER]. Rework rounds ("changes requested") do not lower Q directly; the reviewer's final score is what counts, and rework count is shown beside it. [CALL]
 
-### 5.6 Performance score S [OWNER]
-`S = O × 0.50 + T × 0.20 + Q × 0.30`.
-- If a person has **no reviewed tasks** in the period: `S = (O × 0.50 + T × 0.20) ÷ 0.70`, flagged "no quality reviews". If no rated outcomes: same idea with the weights present. [CALL]
-- Weights are fixed in v1 and printed on the page next to every score. [CALL]
+### 5.6 Performance score S [OWNER, D-124]
+**Since 2026-11-11: `S = O`, the weighted Outcome Score alone.** The leaderboard ranks on it. Timeliness, Quality and Efficiency are still computed and shown for context, but do not change the rank.
+- Superseded rule (2026-11-06 to 2026-11-10): `S = O × 0.50 + T × 0.20 + Q × 0.30`. Its code (`combine()`, `WEIGHTS`) and tests were removed on 2026-11-11 with the owner's approval.
+- The ranking rule and the priority weights in force are printed under the leaderboard and on the person page.
 - People with **fewer than 5 eligible tasks** in the period are listed but **not ranked**. [CALL]
 
-Worked check (owner's example): Simran 92/90/95 → 92.5; Nusrat 88/95/90 → **90.0** (the example's 90.1 is a rounding slip); Tanya 85/85/92 → 87.1; Brian 78/80/85 → 80.5.
+Worked check (owner's example, D-124): 10/10, 40/50, 4/5 with equal weights → (100 + 80 + 80) ÷ 3 = **86.67**. With Critical 3 on the first task: (300 + 80 + 80) ÷ 5 = 92. (`server/test/performance.test.ts`)
 
 ### 5.7 Efficiency E (0–100), shown, not in S [CALL from OWNER's "how much was completed in the given time"]
 `E = average over eligible tasks of (task outcome % if completed on time, else 0)`, accepted shortfalls/delays excluded. Shown **split by priority** (Critical/High vs Normal/Low) so work under pressure is visible. [CALL]
@@ -164,3 +164,22 @@ Migration shape, API paths (follow API_CONTRACTS conventions), caching of period
 ## 9. Decisions recorded
 
 D-110 owner: proceed without HR appraisal and without hours tracking (Founder's Office confirmation still advisable, since the WO is theirs) · D-111 department = vertical (existing entity), team = team · D-112 no time capture · D-113 n/a in v1 · D-114 task giver sets purpose · D-115/D-116 dropped (no funnel, no daily plan) · D-117 employees see their team board, management team by team · D-118/D-119 n/a (no funnel, no revenue) · D-120 open (migration) · D-121 open, default no.
+
+## D-125: standard times and the over-time reason (owner, 2026-11-11; CODE_COMPLETE)
+
+- **Standard task times.** `shared/standardTasks.ts` holds the default catalog: 82 rows transcribed from *Sales & Marketing — Task Time Estimation and SLA Guide*, each with section, task, min–max minutes per batch, batch size and unit. The organization's copy is the `standardTasks` setting, edited by the CoS under Settings → Standard task times (strict validation; at most 500 rows; omitted on save = unchanged). Everyone may read it (public settings), because the task form needs it.
+- **Recommended estimate.** On the task form a "Standard task" picker fills the unit and the estimate: `recommendedHours = average(min, max) × quantity ÷ per`, rounded to 0.25 h, within 0.25–200 h. The quantity is the target, or one batch. The manager may keep it or type their own; changing the target shows a new recommendation with a "Use it" button.
+- **Working time.** `workingHours(from, to, zone, shift)` counts the hours inside shifts that start Monday to Friday; an overnight shift (end ≤ start) runs past midnight. `shiftOf`: a person's own quiet window (D-105; the night team's 08:00–20:00) gives the complementary shift (20:00–08:00); everyone else works the Settings workday. The clock starts automatically at the scheduled start, else at assignment; no timer and nothing to enter. Public holidays are not excluded (owner accepted).
+- **Over-time reason.** At submit or complete, `worked > estimatedHours` on a scored task requires the reason field, as late or short tasks already do: *"Took 7.5 working hours against a 5 h standard: explain the delay."* A newly given reason is also posted as a task comment ("Reason for delay or shortfall: …").
+- **Reviewer.** The task page shows "Working time: 7.5 h of 5 h standard (+50 %)" next to the reason. Accepting the reason leaves the task out of the score (the existing shortfall acceptance); otherwise it is scored as usual.
+- **Targets.** Finishing below a numeric target already required a reason (PERF-02); unchanged.
+- Tests: `server/test/performance.test.ts` (weekday, weekend, overnight shift, outside the shift, shiftOf, catalog size and recommendations); `api.test.ts` "D-125: over the standard working time…" (not run yet).
+
+## D-128: leaderboard visuals and analytics (owner, 2026-11-11; CODE_COMPLETE)
+
+Visibility is unchanged (D-117). Above the leaderboard table, `BoardVisuals` shows:
+- **Top performers:** a podium of the three highest-ranked people (1st in the middle); names link to the person page when the viewer may open it.
+- **Outcome scores:** a bar for everyone with a score in the period, best first, with their rank; a bar opens the person page when allowed.
+- **Score trend:** the team's average Outcome Score for each of the last 8 weeks ending with the period (`GET /api/performance/analytics` `trend`). Weeks without scored tasks are skipped, and at least two weeks are needed.
+- **Team comparison:** only for viewers who may see more than one team: each team's average Outcome Score in the period, best first (`teams`). Choosing a bar opens that team's board. Teams without scores are listed as "No scores yet", never drawn as 0.
+- Team average = `averageScore` (`shared/performance.ts`): the mean of the members' Outcome Scores, leaving out people without one, to one decimal. Access: the same team check as the leaderboard (404 outside scope).

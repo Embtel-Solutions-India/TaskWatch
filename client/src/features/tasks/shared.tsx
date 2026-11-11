@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { DAY, HOUR, PRIORITY_ORDER, STATUS_LABEL } from '../../constants';
 import type { Column } from '../../components/DataTable';
@@ -7,6 +8,7 @@ import { useAction, useLocalState, useMe } from '../../hooks';
 import { taskStage } from '@taskwatch/shared/insights';
 import type { TaskView } from '../../services/api/base';
 import { acknowledgeTask } from '../../services/api/tasks';
+import { CancelDialog, DiscardDialog, ReassignDialog } from './TaskDialogs';
 import { allowedActions } from '../../services/engine/workflow';
 import { getDb, now } from '../../services/mock/store';
 import type { Priority, Status } from '../../types';
@@ -60,16 +62,30 @@ function RowActions({ t }: { t: TaskView }) {
   const user = useMe();
   const nav = useNavigate();
   const ack = useAction(acknowledgeTask, { success: `${t.id} acknowledged` });
+  const [dialog, setDialog] = useState<'reassign' | 'cancel' | 'discard' | null>(null);
   const actions = t.actions ? new Set(t.actions) : allowedActions(getDb(), user, t); // server mode: computed by the server
+  const close = () => setDialog(null);
   return (
-    <Menu
-      label={`Actions for ${t.id}`}
-      items={[
-        { label: 'Open', icon: 'external', onClick: () => nav(`/tasks/${t.id}`) },
-        actions.has('acknowledge') ? { label: 'Acknowledge', icon: 'check', onClick: () => ack.run(t.id) } : null,
-        actions.has('edit') ? { label: 'Edit', icon: 'edit', onClick: () => nav(`/tasks/${t.id}/edit`) } : null,
-      ]}
-    />
+    <>
+      <Menu
+        label={`Actions for ${t.id}`}
+        items={[
+          { label: 'Open', icon: 'external', onClick: () => nav(`/tasks/${t.id}`) },
+          actions.has('acknowledge') ? { label: 'Acknowledge', icon: 'check', onClick: () => ack.run(t.id) } : null,
+          actions.has('edit') ? { label: 'Edit', icon: 'edit', onClick: () => nav(`/tasks/${t.id}/edit`) } : null,
+          // D-133: the giver's own actions, in every task list.
+          actions.has('reassign') ? { label: 'Reassign', icon: 'users', onClick: () => setDialog('reassign') } : null,
+          actions.has('discard')
+            ? { label: 'Delete draft', icon: 'trash', danger: true, onClick: () => setDialog('discard') }
+            : actions.has('cancel')
+              ? { label: 'Cancel task', icon: 'x', danger: true, onClick: () => setDialog('cancel') }
+              : null,
+        ]}
+      />
+      {dialog === 'reassign' && <ReassignDialog task={t} onClose={close} />}
+      {dialog === 'cancel' && <CancelDialog task={t} onClose={close} />}
+      {dialog === 'discard' && <DiscardDialog task={t} onClose={close} />}
+    </>
   );
 }
 

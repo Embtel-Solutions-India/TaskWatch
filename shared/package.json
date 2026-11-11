@@ -13,6 +13,7 @@
     "./recurrence": "./recurrence.ts",
     "./performance": "./performance.ts",
     "./insights": "./insights.ts",
-    "./reports": "./reports.ts"
+    "./reports": "./reports.ts",
+    "./standardTasks": "./standardTasks.ts"
   }
 }

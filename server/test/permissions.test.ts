@@ -10,6 +10,8 @@ import {
   hasPerm,
   isOverseer,
   reportsOf,
+  reportsTo,
+  seniorOf,
   wouldCreateLoop,
   type Org,
   type Person,
@@ -92,5 +94,45 @@ describe('shared permissions', () => {
     assert.ok(wouldCreateLoop(org, 4, 4), 'self');
     assert.ok(!wouldCreateLoop(org, 5, 7), 'moving staff to another lead');
     assert.ok(!wouldCreateLoop(org, 9, null));
+  });
+});
+
+describe('ADR-0011 / D-130: automatic reporting line', () => {
+  // Vertical V1 (GM 3) with Sales (lead 4) and Marketing (no lead); vertical V2 has no GM; Support in V2 has lead 7.
+  const ctx = {
+    entities: [{ id: 'V1', headId: 3 }, { id: 'V2', headId: null }],
+    teams: [{ id: 10, leadId: 4 }, { id: 11, leadId: null }, { id: 12, leadId: 7 }],
+    senior: 2,
+  };
+  const p = (id: number, roles: Role[], entityId: string | null, teamId: number | null) => ({ id, roles, entityId, teamId });
+
+  it('a member reports to the department lead, else the general manager, else the Chief of Staff', () => {
+    assert.equal(reportsTo(p(5, ['staff'], 'V1', 10), ctx), 4, 'lead');
+    assert.equal(reportsTo(p(6, ['staff'], 'V1', 11), ctx), 3, 'no lead: general manager');
+    assert.equal(reportsTo(p(8, ['staff'], 'V2', null), ctx), 2, 'no department, no GM: Chief of Staff');
+    assert.equal(reportsTo(p(9, ['staff'], 'V2', 12), ctx), 7, 'lead in a vertical without a GM');
+  });
+
+  it('a lead reports to the general manager (else the CoS); a general manager reports to the CoS', () => {
+    assert.equal(reportsTo(p(4, ['lead'], 'V1', 10), ctx), 3);
+    assert.equal(reportsTo(p(7, ['lead'], 'V2', 12), ctx), 2, 'no GM: Chief of Staff');
+    assert.equal(reportsTo(p(3, ['manager'], 'V1', null), ctx), 2);
+  });
+
+  it('review fix #5: a Chief of Staff reports to the CEO and the CEO to nobody, so a promotion moves the line', () => {
+    assert.equal(reportsTo(p(2, ['cos'], 'FO', null), { ...ctx, ceo: 1 }), 1);
+    assert.equal(reportsTo(p(2, ['cos'], 'FO', null), ctx), null, 'no active CEO');
+    assert.equal(reportsTo(p(1, ['ceo'], 'FO', null), { ...ctx, ceo: 1 }), null);
+    assert.equal(reportsTo(p(5, ['staff', 'cos'], 'V1', 10), { ...ctx, ceo: 1 }), 1, 'promoted out of a department');
+  });
+
+  it('the senior is the first active CoS, else the CEO', () => {
+    const people = [
+      { id: 1, roles: ['ceo'] as Role[], active: true },
+      { id: 2, roles: ['cos'] as Role[], active: false },
+      { id: 9, roles: ['cos'] as Role[], active: true },
+    ];
+    assert.equal(seniorOf(people), 9);
+    assert.equal(seniorOf(people.filter((x) => x.id !== 9)), 1);
   });
 });

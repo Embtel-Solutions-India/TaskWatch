@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool } from '../db/pool.js';
 import { idParam, me, requirePermission, requireUser } from '../http/middleware.js';
 import { resetAccess } from '../services/passwordReset.js';
+import { archiveDepartment, archiveVertical, createDepartment, createVertical, departmentEditSchema, departmentSchema, updateDepartment, updateVertical, verticalEditSchema, verticalSchema } from '../services/structure.js';
 import {
   createPerson,
   listPeople,
@@ -20,8 +21,32 @@ export const peopleRouter = Router();
 peopleRouter.use(requireUser);
 
 peopleRouter.get('/entities', async (req, res) => {
-  const { rows } = await pool.query('select id, name from entities where organization_id = $1 order by sort', [me(req).user.organizationId]);
+  const { rows } = await pool.query('select id, name from entities where organization_id = $1 and archived_at is null order by sort', [me(req).user.organizationId]);
   res.json(rows);
+});
+
+// ADR-0011 / D-131: verticals (entities) and departments (teams), managed by manage_staff. Never deleted.
+peopleRouter.post('/entities', requirePermission('manage_staff', 'manage verticals'), async (req, res) => {
+  res.status(201).json({ id: await createVertical(me(req).user, verticalSchema.parse(req.body)) });
+});
+peopleRouter.put('/entities/:id', requirePermission('manage_staff', 'manage verticals'), async (req, res) => {
+  await updateVertical(me(req).user, String(req.params.id), verticalEditSchema.parse(req.body));
+  res.status(204).end();
+});
+peopleRouter.post('/entities/:id/archive', requirePermission('manage_staff', 'manage verticals'), async (req, res) => {
+  await archiveVertical(me(req).user, String(req.params.id));
+  res.status(204).end();
+});
+peopleRouter.post('/teams', requirePermission('manage_staff', 'manage departments'), async (req, res) => {
+  res.status(201).json({ id: await createDepartment(me(req).user, departmentSchema.parse(req.body)) });
+});
+peopleRouter.put('/teams/:id', requirePermission('manage_staff', 'manage departments'), async (req, res) => {
+  await updateDepartment(me(req).user, idParam(req), departmentEditSchema.parse(req.body));
+  res.status(204).end();
+});
+peopleRouter.post('/teams/:id/archive', requirePermission('manage_staff', 'manage departments'), async (req, res) => {
+  await archiveDepartment(me(req).user, idParam(req));
+  res.status(204).end();
 });
 
 /** ORG-01: entities, teams and the people the caller may see, with load counts. */

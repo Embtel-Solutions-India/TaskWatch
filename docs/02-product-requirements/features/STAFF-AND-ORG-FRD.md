@@ -255,7 +255,7 @@
 
 ## ORG-01 Organisation tree and teams
 
-**Description.** `/admin/org`: reporting tree and team groupings, search with chain highlight, per-person load badge, orphan banner. [V-C `features/org/OrgPage.tsx:20-175`]
+**Description.** `/admin/org`: reporting tree (since 2026-11-10 a top-down chart: the CEO → CoS band on top, one column per entity under a coloured pill, elbow connectors, dotted canvas, zoom 50–150 % opening fitted to width; owner request) and team groupings, search with chain highlight, per-person load badge, orphan banner. [V-C `features/org/OrgPage.tsx:20-175`]
 
 **Roles.** Route gate `manage_staff`. [V-C per FEATURE_INVENTORY "/admin/org"] API returns people per `canViewUser`. [V-C `admin.ts:168-174`]
 
@@ -341,3 +341,12 @@
 | [D-22](../../01-discovery/OPEN_QUESTIONS.md) | Decided: standalone directory. |
 | [D-10](../../01-discovery/OPEN_QUESTIONS.md) | Directory paging. |
 | D-40 (decided) | CEO visibility of all people and tasks. |
+
+## ADR-0011: verticals, departments and automatic reporting lines (owner, 2026-11-11; CODE_COMPLETE)
+
+- **Terms:** on screen an entity is a **vertical** and a team is a **department** (Sales, Marketing, …), not a person's team. Code and API keep `entity` / `team`.
+- **Who reports to whom (D-130, automatic, no override):** a general manager → the Chief of Staff; a department lead → the vertical's general manager, else the CoS; anyone else → their department lead, else the general manager, else the CoS. The CoS and CEO are not placed. "The CoS" = the first active CoS, else the CEO (`seniorOf`).
+- **When lines move:** only for the people a change affects: the edited, created, moved or deactivated person and their direct reports; a department's members when its lead changes; a vertical's people when its general manager changes. Each move is audited as `staff.manager_changed` `{automatic: true}`.
+- **Visibility:** unchanged rule (the reporting line). With the automatic lines, a general manager's line covers the whole vertical.
+- **Management (D-131):** `/admin/verticals` for manage_staff: add a vertical (code, name, general manager), rename it, change its GM (the GM moves into it), archive it (409 while active people remain; its departments are archived with it); add, rename or archive departments and set their lead (the lead joins the department). Nothing is deleted.
+- **Tests:** `permissions.test.ts` "ADR-0011 / D-130"; `api.test.ts` "Verticals and departments (ADR-0011…)" plus the rewritten STAFF-02 / ORG-02 tests.

@@ -6,6 +6,8 @@ import { Banner, Button, Card, Checkbox, ConfirmDialog, ErrorState, Field, Input
 import { useAction, useApi } from '../../hooks';
 import { BACKEND } from '../../services/http';
 import { WHATSAPP_ENABLED } from '@taskwatch/shared/notifications';
+import { DEFAULT_SETTINGS } from '@taskwatch/shared/settings';
+import type { StandardTask } from '@taskwatch/shared/standardTasks';
 
 /** Mandatory alert channels (D-106: WhatsApp only when switched on). */
 const CHANNELS = WHATSAPP_ENABLED ? 'WhatsApp, email, in-app' : 'Email, in-app';
@@ -149,10 +151,10 @@ export function PoliciesPage() {
   const isDefault = scope === 'default';
   const base = q.data ? (isDefault ? q.data.defaults : (q.data.overrides[scope] ?? null)) : null;
   const save = useAction(setRules, {
-    success: isDefault ? 'Escalation policy saved; all open tasks re-evaluated.' : "Override saved; that entity's open tasks re-evaluated.",
+    success: isDefault ? 'Escalation policy saved; all open tasks re-evaluated.' : "Override saved; that vertical's open tasks re-evaluated.",
     onSuccess: () => (setConfirm(null), setCreating(false)),
   });
-  const reset = useAction(resetPolicy, { success: 'Override removed; the entity follows the default policy again.', onSuccess: () => setConfirm(null) });
+  const reset = useAction(resetPolicy, { success: 'Override removed; the vertical follows the default policy again.', onSuccess: () => setConfirm(null) });
   useEffect(() => {
     if (q.data) setR(structuredClone(scope === 'default' ? q.data.defaults : (q.data.overrides[scope] ?? q.data.defaults)));
   }, [q.data, scope]);
@@ -185,9 +187,9 @@ export function PoliciesPage() {
         }
       />
       {q.data.entities.length > 0 && (
-        <Field label="Policy for" htmlFor="pol-scope" hint="Each entity follows the default policy unless it has its own update windows and multiples.">
+        <Field label="Policy for" htmlFor="pol-scope" hint="Each vertical follows the default policy unless it has its own update windows and multiples.">
           <select id="pol-scope" className="input select" value={scope} onChange={(e) => (setScope(e.target.value), setCreating(false))}>
-            <option value="default">Default (every entity)</option>
+            <option value="default">Default (every vertical)</option>
             {q.data.entities.map((e) => (
               <option key={e.id} value={e.id}>
                 {e.name}
@@ -199,10 +201,10 @@ export function PoliciesPage() {
       )}
       {!isDefault && !editable && (
         <Banner tone="info" action={<Button size="sm" onClick={() => setCreating(true)}>Create override</Button>}>
-          This entity follows the default policy.
+          This vertical follows the default policy.
         </Banner>
       )}
-      {!isDefault && editable && <Banner tone="info">Only update windows and level multiples can differ per entity. Past-due floors, acknowledgement, quiet hours and routing come from the default policy.</Banner>}
+      {!isDefault && editable && <Banner tone="info">Only update windows and level multiples can differ per vertical. Past-due floors, acknowledgement, quiet hours and routing come from the default policy.</Banner>}
       <Card title="Resulting ladder" sub="Silence thresholds = update window × level multiple">
         <div className="table-scroll">
           <table className="table policy">
@@ -312,10 +314,10 @@ export function PoliciesPage() {
       )}
       <PolicySimulator rules={r} />
       <ConfirmDialog open={confirm === 'save'} onClose={() => setConfirm(null)} onConfirm={() => save.run(r, scope)} title={isDefault ? 'Apply new escalation policy?' : 'Apply this override?'} confirmLabel="Apply policy" loading={save.pending}>
-        <p>{isDefault ? 'Every open task' : "Every open task in this entity"} is re-evaluated immediately. Tasks may escalate (or stop escalating) as a result. Existing escalation history is never altered.</p>
+        <p>{isDefault ? 'Every open task' : "Every open task in this vertical"} is re-evaluated immediately. Tasks may escalate (or stop escalating) as a result. Existing escalation history is never altered.</p>
       </ConfirmDialog>
       <ConfirmDialog open={confirm === 'reset'} onClose={() => setConfirm(null)} onConfirm={() => reset.run(scope)} title="Remove this override?" confirmLabel="Follow the default" loading={reset.pending}>
-        <p>The entity's open tasks follow the default policy again and are re-evaluated immediately.</p>
+        <p>The vertical's open tasks follow the default policy again and are re-evaluated immediately.</p>
       </ConfirmDialog>
     </div>
   );
@@ -427,6 +429,16 @@ export function SettingsPage() {
           </Field>
         </div>
       </Card>
+      <Card title="Performance scoring" sub="The leaderboard ranks on the Outcome Score: Σ(task outcome % × weight) ÷ Σ(weight). Each task weighs by its priority; all 1 counts every task equally.">
+        <div className="grid-2">
+          {PRIORITIES.map((p) => (
+            <Field key={p} label={`${PRIORITY_LABEL[p]} task weight`} htmlFor={`st-w-${p}`} error={f[`priorityWeights.${p}`]}>
+              <Input id={`st-w-${p}`} type="number" min={1} max={10} value={(s.priorityWeights ?? DEFAULT_SETTINGS.priorityWeights)[p]} onChange={(e) => setS({ ...s, priorityWeights: { ...(s.priorityWeights ?? DEFAULT_SETTINGS.priorityWeights), [p]: Number(e.target.value) } })} />
+            </Field>
+          ))}
+        </div>
+      </Card>
+      <StandardTasksCard rows={s.standardTasks ?? DEFAULT_SETTINGS.standardTasks} errors={f} onChange={(standardTasks) => setS({ ...s, standardTasks })} />
       <Card title="Task categories">
         <div className="tag-cloud mb">
           {s.categories.map((c) => (
@@ -460,5 +472,63 @@ export function SettingsPage() {
         {BACKEND === 'mock' && <Banner tone="warn">Prototype: records live in this browser's storage. Immutable, 7-year retention requires a backend with write-once storage — this prototype does not implement it.</Banner>}
       </Card>
     </div>
+  );
+}
+
+/** D-125: the standard task times behind the task form's recommended estimate (default: the owner's SLA guide). */
+function StandardTasksCard({ rows, errors, onChange }: { rows: StandardTask[]; errors: Record<string, string | undefined>; onChange: (rows: StandardTask[]) => void }) {
+  const edit = (i: number, patch: Partial<StandardTask>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const num = (v: string) => (v === '' ? 0 : Number(v));
+  const err = (i: number) => Object.entries(errors).find(([k]) => k.startsWith(`standardTasks.${i}.`))?.[1];
+  return (
+    <Card title="Standard task times" sub={`${rows.length} tasks. The task form recommends an estimate: the average of the range × the quantity. An assignee over the estimate must give a reason.`}>
+      <details>
+        <summary className="link-btn">Show and edit the list</summary>
+        <div className="table-scroll mt">
+          <table className="table">
+            <caption className="sr-only">Standard task times</caption>
+            <thead>
+              <tr>
+                <th>Section</th>
+                <th>Task</th>
+                <th className="right">Min (min)</th>
+                <th className="right">Max (min)</th>
+                <th className="right">Per</th>
+                <th>Unit</th>
+                <th>
+                  <span className="sr-only">Remove</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td data-label="Section"><Input aria-label={`Section, row ${i + 1}`} value={r.section} maxLength={80} style={{ minWidth: '12em' }} onChange={(e) => edit(i, { section: e.target.value })} /></td>
+                  <td data-label="Task">
+                    <Input aria-label={`Task, row ${i + 1}`} value={r.name} maxLength={120} style={{ minWidth: '18em' }} onChange={(e) => edit(i, { name: e.target.value })} invalid={!!err(i)} />
+                    {err(i) && <span className="field-error small">{err(i)}</span>}
+                  </td>
+                  <td data-label="Min (min)"><Input aria-label={`Shortest minutes, row ${i + 1}`} type="number" min={1} value={r.minMinutes} style={{ width: '6em' }} onChange={(e) => edit(i, { minMinutes: num(e.target.value) })} /></td>
+                  <td data-label="Max (min)"><Input aria-label={`Longest minutes, row ${i + 1}`} type="number" min={1} value={r.maxMinutes} style={{ width: '6em' }} onChange={(e) => edit(i, { maxMinutes: num(e.target.value) })} /></td>
+                  <td data-label="Per"><Input aria-label={`Units per batch, row ${i + 1}`} type="number" min={1} value={r.per} style={{ width: '6em' }} onChange={(e) => edit(i, { per: num(e.target.value) })} /></td>
+                  <td data-label="Unit"><Input aria-label={`Unit, row ${i + 1}`} value={r.unit} maxLength={40} style={{ width: '8em' }} onChange={(e) => edit(i, { unit: e.target.value })} /></td>
+                  <td>
+                    <Button size="sm" variant="ghost" icon="trash" aria-label={`Remove ${r.name || `row ${i + 1}`}`} onClick={() => onChange(rows.filter((_, j) => j !== i))} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="row-gap mt">
+          <Button size="sm" icon="plus" onClick={() => onChange([...rows, { section: rows.at(-1)?.section ?? 'General', name: '', minMinutes: 30, maxMinutes: 60, per: 1, unit: 'tasks' }])}>
+            Add a task
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => onChange(DEFAULT_SETTINGS.standardTasks)}>
+            Restore the guide's list
+          </Button>
+        </div>
+      </details>
+    </Card>
   );
 }

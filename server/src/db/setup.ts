@@ -24,7 +24,8 @@ async function setup(): Promise<void> {
   console.log(applied.length ? `Applied migrations: ${applied.join(', ')}` : 'Schema is up to date.');
 
   const { rows } = await pool.query('select count(*) as n from users');
-  if (rows[0].n === 0) await seed();
+  if (rows[0].n === 0 && config.isProd) console.log('Empty production directory: run `npm run db:bootstrap` (never the demo data).');
+  else if (rows[0].n === 0) await seed();
   else console.log('Directory already has people; skipping sample data. Use `npm run db:seed -- --reset` to start over.');
 }
 

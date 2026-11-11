@@ -1,7 +1,7 @@
 // DASH-01…03 and PERF-07: the role dashboard and the team overview, computed on the server over the viewer's scope.
 // Metrics are the shared rules (shared/insights.ts, ADR-0007); this file only gathers scoped data and names people.
 import { buildDashboard, buildTeamOverview, layoutFor, type DashPerson, type Range } from '@taskwatch/shared/insights';
-import { isCoS, isFoundersOffice } from '@taskwatch/shared/permissions';
+import { isFoundersOffice, needsManager } from '@taskwatch/shared/permissions';
 import { taskProgress } from '@taskwatch/shared/performance';
 import * as clock from '../clock.js';
 import { pool } from '../db/pool.js';
@@ -134,7 +134,7 @@ export async function roleDashboard(viewer: DirUser, dir: Directory, q: { range:
   if (layout === 'executive') {
     const active = staff.filter((u) => u.active);
     const name = (id: number | null) => (id ? (dir.get(id)?.name ?? null) : null);
-    extra.staff = { active: active.length, inactive: staff.length - active.length, noManager: staff.filter((u) => u.managerId === null && !isCoS(u)).length };
+    extra.staff = { active: active.length, inactive: staff.length - active.length, noManager: staff.filter(needsManager).length };
     extra.staffByRole = Object.fromEntries(ROLES.map((r) => [r, active.filter((u) => primaryRole(u) === r).length]));
     extra.orgMini = ents.rows
       .filter((e) => inEntity(e.id))

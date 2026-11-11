@@ -1,3 +1,4 @@
+import { DEFAULT_STANDARD_TASKS, type StandardTask } from '@taskwatch/shared/standardTasks';
 import { HOUR, LEVEL_LABEL, PRIORITY_LABEL, STATUS_LABEL } from '../../constants';
 import type { Attachment, Db, Priority, Task, User } from '../../types';
 import { ACTIVE_STATUSES, PRIORITIES } from '../../types';
@@ -68,8 +69,8 @@ function mockGetTask(id: string) {
   });
 }
 
-/** Server mode adds the task's entity rules (the page shows their thresholds). */
-export type TaskDetail = ReturnType<typeof mockGetTask> & { rules?: RulesConfig };
+/** Server mode adds the task's entity rules (the page shows their thresholds) and its working time against the standard (D-125). */
+export type TaskDetail = ReturnType<typeof mockGetTask> & { rules?: RulesConfig; time?: { worked: number; standard: number } | null };
 
 export interface TaskInput {
   title: string;
@@ -427,6 +428,16 @@ export function reassignTask(id: string, input: { toId: string; reason: string }
   });
 }
 
+/** D-133: the giver deletes a never-assigned draft. The server hides it everywhere (never deleted); the prototype drops it. */
+export function discardTask(id: string): void | Promise<void> {
+  if (BACKEND === 'server') return tasksServer.discard(id);
+  mutate((db, user) => {
+    assertAction(db, user, findTask(db, id), 'discard', 'delete this draft');
+    db.tasks = db.tasks.filter((t) => t.id !== id);
+    db.activities = db.activities.filter((a) => a.taskId !== id);
+  });
+}
+
 export function cancelTask(id: string, reason: string): void | Promise<void> {
   if (BACKEND === 'server') return tasksServer.cancel(id, reason);
   mutate((db, user, at) => {
@@ -612,9 +623,11 @@ export interface TaskFormLookups {
   teams: { id: string; name: string; departmentId?: string }[];
   /** Verticals (entities), for showing the derived entity (D-63). */
   entities: { id: string; name: string }[];
+  /** D-125: standard task times; the form recommends an estimate from them. */
+  standardTasks: StandardTask[];
 }
 
 export function taskFormLookups(): TaskFormLookups | Promise<TaskFormLookups> {
   if (BACKEND === 'server') return tasksServer.formLookups();
-  return read((db) => ({ categories: db.settings.categories, rules: db.rules, teams: db.teams, entities: db.departments }));
+  return read((db) => ({ categories: db.settings.categories, rules: db.rules, teams: db.teams, entities: db.departments, standardTasks: db.settings.standardTasks ?? DEFAULT_STANDARD_TASKS }));
 }

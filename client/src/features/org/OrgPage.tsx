@@ -1,12 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ROLE_LABEL, ROLE_RANK } from '../../constants';
 import { Icon } from '../../components/icons';
-import { Avatar, Banner, Button, Card, Dialog, ErrorState, Field, Input, PageHeader, RoleBadge, Segmented, Select, Skeleton, Stat, Tag } from '../../components/ui';
+import { Avatar, Banner, Button, Card, Dialog, ErrorState, Field, Input, PageHeader, Segmented, Select, Skeleton, Stat, Tag } from '../../components/ui';
 import { useAction, useApi } from '../../hooks';
 import { getOrg, setPlacement, type OrgData, type StaffRow } from '../../services/api/admin';
 import { ancestorsOf, wouldCreateLoop } from '../../services/authz/permissions';
 import { cx } from '../../utils/format';
+import { BACKEND } from '../../services/http';
+import { needsManager } from '@taskwatch/shared/permissions';
+
+/** Entity pill colours, cycled in entity order (theme tokens, so dark mode follows). */
+const PILL = ['var(--violet)', 'var(--ok)', 'var(--primary)', 'var(--warn)', 'var(--muted)'];
 
 export function OrgPage() {
   const q = useApi(['org'], getOrg);
@@ -14,6 +19,15 @@ export function OrgPage() {
   const [view, setView] = useState<'tree' | 'teams'>('tree');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [moving, setMoving] = useState<StaffRow | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const loaded = Boolean(q.data);
+  // Open zoomed to fit the canvas width (50–100 %); the buttons take over from there.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const chart = el?.firstElementChild;
+    if (el && chart) setZoom(Math.max(0.5, Math.min(1, Math.floor(((el.clientWidth - 32) / chart.scrollWidth) * 10) / 10)));
+  }, [loaded]);
   const users = q.data?.users ?? [];
   const match = query.trim().toLowerCase();
   const hits = useMemo(() => (match ? users.filter((u) => u.name.toLowerCase().includes(match) || u.title.toLowerCase().includes(match)) : []), [users, match]);
@@ -28,54 +42,62 @@ export function OrgPage() {
   if (q.error) return <ErrorState error={q.error} />;
   if (!q.data) return <Skeleton rows={10} />;
   const org = q.data;
-  const roots = users.filter((u) => !u.managerId || !users.some((x) => x.id === u.managerId)).sort((a, b) => ROLE_RANK[b.role] - ROLE_RANK[a.role]);
-  const orphans = users.filter((u) => !u.managerId && u.role !== 'cos');
-  const childrenOf = (id: string) => users.filter((u) => u.managerId === id).sort((a, b) => ROLE_RANK[b.role] - ROLE_RANK[a.role] || a.name.localeCompare(b.name));
+  const orphans = users.filter(needsManager);
+  const byRank = (a: StaffRow, b: StaffRow) => ROLE_RANK[b.role] - ROLE_RANK[a.role] || a.name.localeCompare(b.name);
+  const childrenOf = (id: string) => users.filter((u) => u.managerId === id).sort(byRank);
+  // Chart layout: the top person's entity (and anyone without a known entity) forms the top band; every other entity is a
+  // column headed by its pill. Columns are cut from the reporting line, so the chart never disagrees with the tree.
+  const deptIds = new Set(org.departments.map((d) => d.id));
+  const top = users.filter((u) => !u.managerId || !users.some((x) => x.id === u.managerId)).sort(byRank)[0];
+  const group = (u: StaffRow) => (u.entityId && deptIds.has(u.entityId) && u.entityId !== top?.entityId ? u.entityId : '');
+  const headsOf = (g: string) => users.filter((u) => group(u) === g && !users.some((m) => m.id === u.managerId && group(m) === g)).sort(byRank);
+  const columns = org.departments.map((d) => ({ d, heads: headsOf(d.id) })).filter((c) => c.heads.length > 0);
   const toggle = (id: string) => setCollapsed((s) => {
     const n = new Set(s);
     n.has(id) ? n.delete(id) : n.add(id);
     return n;
   });
 
-  const Node = ({ u, depth }: { u: StaffRow; depth: number }) => {
+  const Node = ({ u }: { u: StaffRow }) => {
     const kids = childrenOf(u.id);
-    const open = !collapsed.has(u.id) || (match && kids.some((k) => highlight.has(k.id)));
+    const shown = kids.filter((k) => group(k) === group(u)); // reports in other entities sit in their own column
+    const open = !collapsed.has(u.id) || (match && shown.some((k) => highlight.has(k.id)));
     const l = { open: u.openTasks, overdue: u.overdueTasks };
     const team = org.teams.find((t) => t.id === u.teamId);
     return (
-      <li className={cx('org-node', match && !highlight.has(u.id) && 'dim', hits.some((h) => h.id === u.id) && 'hit')}>
-        <div className={cx('org-card', u.status !== 'active' && 'inactive', `role-edge-${u.role}`)}>
-          {kids.length > 0 ? (
-            <button type="button" className="org-toggle" onClick={() => toggle(u.id)} aria-expanded={!!open} aria-label={`${open ? 'Collapse' : 'Expand'} ${u.name}'s reports`}>
-              <Icon name={open ? 'chevron-down' : 'chevron-right'} size={14} />
-            </button>
-          ) : (
-            <span className="org-toggle-spacer" />
-          )}
-          <Avatar name={u.name} size={30} inactive={u.status !== 'active'} />
-          <div className="org-info">
-            <Link to={`/admin/staff/${u.id}`} className="org-name">
+      <li className={cx('oc-node', match && !highlight.has(u.id) && 'dim', hits.some((h) => h.id === u.id) && 'hit')}>
+        <div className={cx('oc-card', u.status !== 'active' && 'inactive')}>
+          <Avatar name={u.name} size={36} inactive={u.status !== 'active'} />
+          <div className="oc-info">
+            <Link to={`/admin/staff/${u.id}`} className="oc-name">
               {u.name}
             </Link>
-            <span className="muted small">
-              {u.title}
-              {team && ` · ${team.name}`}
+            <span className="oc-title" title={team ? `${u.title} · ${team.name}` : u.title}>
+              {u.title || ROLE_LABEL[u.role]}
             </span>
           </div>
-          <RoleBadge role={u.role} />
-          {kids.length > 0 && <span className="org-count" title="Direct reports">{kids.length}</span>}
-          <span className={cx('org-load', l.overdue ? 'danger' : l.open > org.overloadThreshold ? 'warn' : 'ok')} title={`${l.open} open, ${l.overdue} overdue`}>
-            {l.open}
-            {l.overdue > 0 && <small> · {l.overdue}!</small>}
-          </span>
-          {!u.managerId && u.role !== 'cos' && <Tag tone="warn">No manager</Tag>}
-          {u.status !== 'active' && <Tag tone="muted">Inactive</Tag>}
           <Button size="sm" variant="ghost" icon="edit" onClick={() => setMoving(u)} aria-label={`Change reporting for ${u.name}`} />
+          <div className="oc-meta">
+            <span className={cx('org-load', l.overdue ? 'danger' : l.open > org.overloadThreshold ? 'warn' : 'ok')} title={`${l.open} open, ${l.overdue} overdue`}>
+              {l.open}
+              {l.overdue > 0 && <small> · {l.overdue}!</small>}
+            </span>
+            {shown.length > 0 ? (
+              <button type="button" className="org-count oc-toggle" onClick={() => toggle(u.id)} aria-expanded={!!open} aria-label={`${open ? 'Collapse' : 'Expand'} ${u.name}'s reports`} title="Direct reports">
+                {kids.length}
+                <Icon name={open ? 'chevron-up' : 'chevron-down'} size={12} />
+              </button>
+            ) : (
+              kids.length > 0 && <span className="org-count" title="Direct reports">{kids.length}</span>
+            )}
+            {needsManager(u) && <Tag tone="warn">No manager</Tag>}
+            {u.status !== 'active' && <Tag tone="muted">Inactive</Tag>}
+          </div>
         </div>
-        {open && kids.length > 0 && (
-          <ul className="org-children">
-            {kids.map((k) => (
-              <Node key={k.id} u={k} depth={depth + 1} />
+        {open && shown.length > 0 && (
+          <ul className="oc-children">
+            {shown.map((k) => (
+              <Node key={k.id} u={k} />
             ))}
           </ul>
         )}
@@ -85,11 +107,11 @@ export function OrgPage() {
 
   return (
     <div className="page">
-      <PageHeader title="Organization Structure" description="The reporting hierarchy drives task visibility, who can assign to whom, and escalation routing." actions={<Segmented label="View" value={view} onChange={setView} options={[{ value: 'tree', label: 'Reporting tree' }, { value: 'teams', label: 'Teams' }]} />} />
+      <PageHeader title="Organization Structure" description="The reporting hierarchy drives task visibility, who can assign to whom, and escalation routing." actions={<Segmented label="View" value={view} onChange={setView} options={[{ value: 'tree', label: 'Reporting tree' }, { value: 'teams', label: 'Departments' }]} />} />
       <div className="stats">
         <Stat label="People" value={users.length} />
-        <Stat label="Entities" value={org.departments.length} />
-        <Stat label="Teams" value={org.teams.length} />
+        <Stat label="Verticals" value={org.departments.length} />
+        <Stat label="Departments" value={org.teams.length} />
         <Stat label="Without a manager" value={orphans.length} tone={orphans.length ? 'warn' : undefined} help="Escalations skip their missing level and go to the next existing one (ultimately the Chief of Staff)." />
       </div>
       {orphans.length > 0 && (
@@ -114,11 +136,44 @@ export function OrgPage() {
           }
         >
           {match && <p className="muted small">{hits.length} match(es); reporting paths highlighted.</p>}
-          <ul className="org-tree">
-            {roots.map((r) => (
-              <Node key={r.id} u={r} depth={0} />
-            ))}
-          </ul>
+          <div className="oc-canvas">
+            <div className="oc-scroll" ref={scrollRef}>
+            <div className="oc-chart" style={{ zoom }}>
+              <ul className="oc-top">
+                {headsOf('').map((r) => (
+                  <Node key={r.id} u={r} />
+                ))}
+              </ul>
+              {columns.length > 0 && (
+                <div className="oc-cols">
+                  {columns.map(({ d, heads }, i) => (
+                    <section key={d.id} className="oc-col" aria-label={d.name}>
+                      <div className="oc-pill" style={{ background: PILL[i % PILL.length] }} title={d.name}>
+                        {d.name}
+                      </div>
+                      <ul className="oc-branch">
+                        {heads.map((h) => (
+                          <Node key={h.id} u={h} />
+                        ))}
+                      </ul>
+                    </section>
+                  ))}
+                </div>
+              )}
+            </div>
+            </div>
+            <div className="oc-zoom" role="group" aria-label="Zoom">
+              <button type="button" onClick={() => setZoom((z) => Math.min(1.5, +(z + 0.1).toFixed(1)))} aria-label="Zoom in" disabled={zoom >= 1.5}>
+                +
+              </button>
+              <button type="button" onClick={() => setZoom(1)} aria-label="Reset zoom" className="oc-zoom-level">
+                {Math.round(zoom * 100)}%
+              </button>
+              <button type="button" onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.1).toFixed(1)))} aria-label="Zoom out" disabled={zoom <= 0.5}>
+                −
+              </button>
+            </div>
+          </div>
         </Card>
       ) : (
         <div className="team-grid">
@@ -191,6 +246,11 @@ function MoveDialog({ user, org, onClose }: { user: StaffRow; org: OrgData; onCl
       }
     >
       <div className="stack">
+        {BACKEND === 'server' ? (
+          <Field label="Reports to" htmlFor="mv-mgr" hint="Set automatically: the department lead, else the vertical's general manager, else the Chief of Staff.">
+            <Input id="mv-mgr" value={org.users.find((u) => u.id === user.managerId)?.name ?? 'No manager'} readOnly />
+          </Field>
+        ) : (
         <Field label="Reports to" htmlFor="mv-mgr" error={loop ? `${user.name} cannot report to someone in their own reporting line.` : place.fields.managerId}>
           <Select id="mv-mgr" value={managerId} onChange={(e) => setManagerId(e.target.value)} invalid={loop}>
             <option value="">No manager</option>
@@ -204,9 +264,10 @@ function MoveDialog({ user, org, onClose }: { user: StaffRow; org: OrgData; onCl
               ))}
           </Select>
         </Field>
-        <Field label="Team" htmlFor="mv-team" error={place.fields.teamId}>
+        )}
+        <Field label="Department" htmlFor="mv-team" error={place.fields.teamId}>
           <Select id="mv-team" value={teamId} onChange={(e) => setTeamId(e.target.value)} invalid={!!place.fields.teamId}>
-            <option value="">No team</option>
+            <option value="">No department</option>
             {teams.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}

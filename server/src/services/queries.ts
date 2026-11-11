@@ -2,6 +2,7 @@ import { workloadFor } from './performance.js';
 import { taskProgress } from '@taskwatch/shared/performance';
 import type { DashExtension, DashTask } from '@taskwatch/shared/insights';
 import { isCoS, isFoundersOffice } from '@taskwatch/shared/permissions';
+import { isActive } from '@taskwatch/shared/workflow';
 import * as clock from '../clock.js';
 import { pool } from '../db/pool.js';
 import { isOpenStatus, LEVEL_LABELS, openSql, taskStage, type Priority } from '../domain.js';
@@ -11,6 +12,7 @@ import { can, canView, relation, taskActions, taskPermissions, visibilityFilter,
 import { presentKind, presentValues, verifyChains } from './activity.js';
 import type { Directory, DirUser } from './directory.js';
 import { getRuleSet } from './rules.js';
+import { timeUsed } from './tasks.js';
 
 /** FR-10 quick views (TASK-09), applied on top of the scope. 'all' (every status) is for server callers and scopes. */
 export const TASK_VIEWS = ['open', 'mine', 'escalated', 'red', 'blocked', 'closed', 'all'] as const;
@@ -36,7 +38,7 @@ export interface ListFilters {
 }
 
 const TASK_COLUMNS = `
-  t.id, t.organization_id, t.title, t.description, t.instructions, t.category, t.entity_id, en.name as entity_name, t.priority, t.status,
+  t.id, t.organization_id, t.discarded_at, t.title, t.description, t.instructions, t.category, t.entity_id, en.name as entity_name, t.priority, t.status,
   t.due_at, t.original_due_at, t.created_at, t.updated_at, t.assigned_at, t.start_at, t.clock_started_at, t.last_update_at,
   t.acknowledged_at, t.snooze_until, t.progress, t.review_required, t.parent_id, t.recurring_id, t.occurrence_date,
   t.cancel_reason, t.completed_at, t.closed_at, t.blocked_reason, t.level, t.lead_extension_used,
@@ -71,7 +73,6 @@ type Rules = Awaited<ReturnType<typeof getRuleSet>>;
  */
 function toTaskView(r: any, now: Date, rules: Rules, viewer: DirUser, dir: Directory) {
   const info = taskLevel(r, rules.for(r.entity_id), now);
-  const active = info !== null; // on the ladder: active statuses and In review
   return {
     id: r.id,
     title: r.title,
@@ -117,7 +118,7 @@ function toTaskView(r: any, now: Date, rules: Rules, viewer: DirUser, dir: Direc
     level: info?.level ?? -1,
     levelInfo: info,
     stage: taskStage(r.status, info?.level ?? -1),
-    overdue: active && r.due_at.getTime() < now.getTime(),
+    overdue: isActive(r.status) && r.due_at.getTime() < now.getTime(), // DASHBOARD-FRD §1.1: a task in review is never overdue
     lastUpdateAt: r.clock_started_at,
     escalationAcked: r.top_acked === true,
     myEscalation: r.my_escalation ?? null,
@@ -558,8 +559,11 @@ export async function taskDetail(viewer: DirUser, dir: Directory, taskId: number
   comments.rows.forEach((c) => add(c.author_id, c.author_name));
   assignments.rows.forEach((s) => (add(s.assignee_id, s.assignee), add(s.assigned_by_id, s.assigned_by)));
 
+  // D-125: working hours so far (to completion, or to submission while in review) against the standard.
+  const until = r.completed_at ?? (r.status === 'submitted' ? r.clock_started_at : null) ?? clock.now();
   return {
     task,
+    time: r.status === 'cancelled' || r.status === 'draft' ? null : await timeUsed(r, dir, viewer.organizationId, until),
     actions: task.actions,
     permissions: taskPermissions(viewer, r, dir),
     activities,

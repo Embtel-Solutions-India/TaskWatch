@@ -292,8 +292,8 @@ The FR-5 direct change is feature **EXT-04** (added after this inventory); its c
 | TC-SRCH-01-01 | I | Matching tasks in both lines | StaffA1 searches a shared word | Only visible tasks (≤8) and people (≤6) | SRCH-01, **AC-6** | planned |
 | TC-SRCH-01-02 | I | — | 100 searches in 10 s | Throttled (429, D-82) | SRCH-01, SEC-3 | planned (limit is 120/min) |
 | TC-SRCH-01-03 | I | — | StaffB1 searches another line's task id; LeadA searches the id, "Lead B", "Manager A", "a", "%", "", 101 chars | none; exact id first; none; found; ≤8/≤6 and no email; empty; empty; 422 | SRCH-01-AC-1…5, **AC-6** | **passed 2026-11-07** (owner's `npm test`) |
-| TC-DEMO-01-01 | I | `NODE_ENV=production` | `POST /api/dev/clock` as CoS | 404/403; clock unchanged | DEMO-01, SEC-10 | written 2026-11-07 (`api.test.ts` "Demo clock": 404 for CoS and manager with demo tools off; gate unit test `config.test.ts` covers `NODE_ENV=production`); not run (owner `npm test`) |
-| TC-DEMO-01-02 | I | Dev, `DEMO_TOOLS=true` | `POST /api/dev/clock` as MgrA and as CoS | 403; 200 + `admin_log` `demo_clock` | DEMO-01 | written 2026-11-07 (`api.test.ts`; also 422 for -1, 721, unknown field); not run (owner `npm test`) |
+| TC-DEMO-01-01 | I | `NODE_ENV=production` | `POST /api/dev/clock` as CoS | 404/403; clock unchanged | DEMO-01, SEC-10 | written 2026-11-07 (`api.test.ts` "Demo clock": 404 for CoS and manager with demo tools off; gate unit test `config.test.ts` covers `NODE_ENV=production`); passed 2026-11-10 (owner `npm test`, all green) |
+| TC-DEMO-01-02 | I | Dev, `DEMO_TOOLS=true` | `POST /api/dev/clock` as MgrA and as CoS | 403; 200 + `admin_log` `demo_clock` | DEMO-01 | written 2026-11-07 (`api.test.ts`; also 422 for -1, 721, unknown field); passed 2026-11-10 (owner `npm test`, all green) |
 | TC-DEMO-01-03 | E | Production build | Sign in as each persona | No demo bar for anyone | DEMO-01 | partial 2026-11-07: server-mode production build scanned, no "Act as", "Scenarios", "Reset data", "Expire session" or demo password; e2e sign-in pass not written |
 
 ## PERF (Performance, progress & workload)

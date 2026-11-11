@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { idParam, me, requireUser } from '../http/middleware.js';
-import { leaderboard, personBreakdown, teamWorkload, visibleTeams } from '../services/performance.js';
+import { analytics, leaderboard, personBreakdown, teamWorkload, visibleTeams } from '../services/performance.js';
 
 // PERF (PERFORMANCE-FRD §3, §5). Access is decided per team / person in the service (404 outside scope).
 export const performanceRouter = Router();
@@ -23,6 +23,12 @@ performanceRouter.get('/performance/leaderboard', async (req, res) => {
   const { user, dir } = me(req);
   const { teamId, ...q } = teamQuery.parse(req.query);
   res.json(await leaderboard(user, dir, teamId, q));
+});
+
+performanceRouter.get('/performance/analytics', async (req, res) => {
+  const { user, dir } = me(req);
+  const { teamId, ...q } = teamQuery.parse(req.query);
+  res.json(await analytics(user, dir, teamId, q));
 });
 
 performanceRouter.get('/performance/people/:id', async (req, res) => {

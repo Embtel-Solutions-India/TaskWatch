@@ -1,4 +1,6 @@
 // Platform settings (SET-01) — one definition and one set of defaults for server and client (ADR-0007).
+import { DEFAULT_STANDARD_TASKS, type StandardTask } from '@taskwatch/shared/standardTasks';
+
 // The server stores only what the Chief of Staff changes (app_state 'settings'); everything else falls back here.
 
 export const CATEGORIES = ['Operations', 'Finance', 'Compliance', 'Client delivery', 'Reporting', 'Hiring', 'IT & Systems', 'Facilities'];
@@ -20,6 +22,10 @@ export interface Settings {
   /** Weekly digest to Managers and the Founder's Office: weekday (0 = Sun) and hour, in IST (D-14, D-44). */
   digestDay: number;
   digestHour: number;
+  /** D-124: each task's weight in the Outcome Score, by priority (1–10). All 1 = equal weights. */
+  priorityWeights: { critical: number; high: number; normal: number; low: number };
+  /** D-125: standard task times; the task form recommends an estimate from them. */
+  standardTasks: StandardTask[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -35,4 +41,6 @@ export const DEFAULT_SETTINGS: Settings = {
   overloadThreshold: 6,
   digestDay: 1,
   digestHour: 9, // WO FR-12: Monday 09:00 IST
+  priorityWeights: { critical: 1, high: 1, normal: 1, low: 1 },
+  standardTasks: DEFAULT_STANDARD_TASKS,
 };

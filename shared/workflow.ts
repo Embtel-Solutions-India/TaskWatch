@@ -55,6 +55,8 @@ export type TaskAction =
   | 'decide_extension'
   | 'reassign'
   | 'cancel'
+  /** D-133: the giver removes a never-assigned draft from every screen (it is hidden, never deleted). */
+  | 'discard'
   | 'reopen'
   | 'edit'
   | 'comment'
@@ -83,6 +85,8 @@ export interface ActionFacts {
   isOverseer: boolean;
   /** Created or assigned the task, or is a Chief of Staff. */
   isGiver: boolean;
+  /** D-133: the current giver (whoever assigned it last; a reassigner takes over, WF-07). Defaults to isGiver. */
+  isCurrentGiver?: boolean;
   can: (p: ActionPermission) => boolean;
   pendingExtension: boolean;
   /** R-1: a "to" recipient of an active escalation level on this task, or a Chief of Staff with one active. */
@@ -108,10 +112,12 @@ export function allowedActions(task: ActionTask, f: ActionFacts): Set<TaskAction
   if (status === 'submitted' && f.isOverseer && f.can('review_tasks')) out.add('review');
   if (assignee && active && !f.pendingExtension) out.add('request_extension');
   if (f.pendingExtension && f.isOverseer && f.can('approve_extensions')) out.add('decide_extension');
-  if (!closed && status !== 'draft' && f.isOverseer && f.can('reassign_tasks')) out.add('reassign');
+  // D-133: the task giver may reassign their own task, as well as anyone above the assignee with reassign_tasks.
+  if (!closed && status !== 'draft' && ((f.isOverseer && f.can('reassign_tasks')) || ((f.isCurrentGiver ?? f.isGiver) && f.can('assign_tasks')))) out.add('reassign');
   if (!closed && (f.isGiver || f.isOverseer) && f.can('assign_tasks')) out.add('cancel');
   if (status === 'completed' && (f.isGiver || f.isOverseer) && f.can('assign_tasks')) out.add('reopen');
   if (!closed && (f.isGiver || f.isOverseer) && f.can('create_tasks')) out.add('edit');
+  if (status === 'draft' && f.isGiver && f.can('create_tasks')) out.add('discard');
   out.add('comment');
   // D-33: a read-only senior (the CEO by default) oversees everything but may not add files.
   if (!closed && (assignee || ((f.isOverseer || f.isGiver) && f.can('create_tasks')))) out.add('attach');

@@ -12,7 +12,7 @@ import { appendAdmin } from './audit.js';
 import type { DirUser } from './directory.js';
 
 /** Settings the organization chooses; the rest are fixed or derived. */
-const STORED = ['timezone', 'workdayStart', 'workdayEnd', 'sessionTimeoutMinutes', 'categories', 'overloadThreshold', 'digestDay', 'digestHour'] as const;
+const STORED = ['timezone', 'workdayStart', 'workdayEnd', 'sessionTimeoutMinutes', 'categories', 'overloadThreshold', 'digestDay', 'digestHour', 'priorityWeights', 'standardTasks'] as const;
 
 export async function getSettings(organizationId: number, db: Db = pool): Promise<Settings> {
   const { rows } = await db.query<{ name: string; value: Partial<Settings> }>('select name, settings as value from organizations where id = $1', [organizationId]);
@@ -34,6 +34,7 @@ export const publicSettings = (s: Settings) => ({
   overloadThreshold: s.overloadThreshold,
   workdayStart: s.workdayStart,
   workdayEnd: s.workdayEnd,
+  standardTasks: s.standardTasks, // D-125: the task form recommends estimates to anyone who creates tasks
 });
 
 const HHMM = { pattern: /^([01]\d|2[0-3]):[0-5]\d$/, error: 'Use HH:MM (24-hour)' };
@@ -55,6 +56,29 @@ export const settingsSchema = z
     overloadThreshold: between(1, 50, 'Between 1 and 50.'),
     digestDay: between(0, 6, 'Between 0 and 6.'),
     digestHour: between(0, 23, 'Between 0 and 23.'),
+    // D-124. Left out: the saved weights stay (older clients send none).
+    priorityWeights: z
+      .object({ critical: between(1, 10, 'Between 1 and 10.'), high: between(1, 10, 'Between 1 and 10.'), normal: between(1, 10, 'Between 1 and 10.'), low: between(1, 10, 'Between 1 and 10.') }, { error: 'Give a weight for every priority.' })
+      .strict()
+      .optional(),
+    // D-125. Left out: the saved catalog stays.
+    standardTasks: z
+      .array(
+        z
+          .object({
+            section: z.string({ error: 'Give a section.' }).trim().min(1, { error: 'Give a section.' }).max(80, { error: 'Use at most 80 characters.' }),
+            name: z.string({ error: 'Give a task name.' }).trim().min(1, { error: 'Give a task name.' }).max(120, { error: 'Use at most 120 characters.' }),
+            minMinutes: z.number({ error: 'Minutes, 1 to 12000.' }).min(1, { error: 'Minutes, 1 to 12000.' }).max(12000, { error: 'Minutes, 1 to 12000.' }),
+            maxMinutes: z.number({ error: 'Minutes, 1 to 12000.' }).min(1, { error: 'Minutes, 1 to 12000.' }).max(12000, { error: 'Minutes, 1 to 12000.' }),
+            per: between(1, 10000, 'Between 1 and 10000.'),
+            unit: z.string({ error: 'Give a unit.' }).trim().min(1, { error: 'Give a unit.' }).max(40, { error: 'Use at most 40 characters.' }),
+          })
+          .strict()
+          .refine((t) => t.maxMinutes >= t.minMinutes, { error: 'The longest time must be at least the shortest.', path: ['maxMinutes'] }),
+        { error: 'Give the standard tasks as a list.' },
+      )
+      .max(500, { error: 'Keep at most 500 standard tasks.' })
+      .optional(),
     categories: z
       .array(z.string({ error: 'Keep at least one category.' }).trim().max(40, { error: 'Use at most 40 characters per category.' }), {
         error: 'Keep at least one category.',
@@ -80,14 +104,15 @@ export async function saveSettings(actor: DirUser, input: z.infer<typeof setting
   await tx(async (c) => {
     await c.query('select 1 from organizations where id = $1 for update', [org]);
     const before = await getSettings(org, c);
-    const stored = Object.fromEntries(STORED.filter((k) => !same(input[k], DEFAULT_SETTINGS[k])).map((k) => [k, input[k]]));
+    const next = { ...input, priorityWeights: input.priorityWeights ?? before.priorityWeights, standardTasks: input.standardTasks ?? before.standardTasks };
+    const stored = Object.fromEntries(STORED.filter((k) => !same(next[k], DEFAULT_SETTINGS[k])).map((k) => [k, next[k]]));
     await c
       .query('update organizations set name = $2, settings = $3 where id = $1', [org, input.orgName, JSON.stringify(stored)])
       .catch((err: { code?: string; constraint?: string }) => {
         if (err.code === '23505' && err.constraint === 'organizations_name_uq') throw invalid({ orgName: 'Another organization already uses this name.' });
         throw err;
       });
-    const changed = (['orgName', ...STORED] as const).filter((k) => !same(before[k], input[k]));
+    const changed = (['orgName', ...STORED] as const).filter((k) => !same(before[k], next[k]));
     if (changed.length) {
       await appendAdmin(c, {
         actorId: actor.id,
@@ -95,7 +120,7 @@ export async function saveSettings(actor: DirUser, input: z.infer<typeof setting
         target: 'settings',
         targetType: 'settings',
         before: Object.fromEntries(changed.map((k) => [k, before[k]])),
-        after: Object.fromEntries(changed.map((k) => [k, input[k]])),
+        after: Object.fromEntries(changed.map((k) => [k, next[k]])),
       });
     }
   });

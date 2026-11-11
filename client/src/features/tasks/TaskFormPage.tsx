@@ -11,6 +11,7 @@ import { now } from '../../services/mock/store';
 import type { Frequency, Priority } from '../../types';
 import { PRIORITIES } from '../../types';
 import { toDateInput, toTimeInput } from '../../utils/format';
+import { recommendedHours, type StandardTask } from '@taskwatch/shared/standardTasks';
 
 export function NewTaskPage() {
   const due = now() + 2 * 24 * HOUR;
@@ -50,6 +51,16 @@ function TaskForm({ initial, taskId, currentAssignee }: { initial: TaskInput; ta
   const options = optionsQ.data ?? [];
   const parents = (parentsQ.data ?? []).filter((p) => p.id !== taskId);
   const look = lookQ.data;
+  // D-125: a standard task recommends the estimate (average time × quantity); the manager may keep or change it.
+  const [std, setStd] = useState<StandardTask | null>(null);
+  const quantityOf = (target: TaskInput['target']) => (Number(target) > 0 ? Number(target) : undefined);
+  const quantity = quantityOf(f.target);
+  const recommended = std ? recommendedHours(std, quantity) : null;
+  const pickStandard = (i: string) => {
+    const s = i === '' ? null : (look?.standardTasks[Number(i)] ?? null);
+    setStd(s);
+    if (s) setF((x) => ({ ...x, unit: x.unit || s.unit, estimatedHours: String(recommendedHours(s, quantityOf(x.target))) }));
+  };
 
   const create = useAction(createTask, { success: (t) => (f.draft ? `Draft ${t.id} saved` : `${t.id} assigned`), onSuccess: (t) => nav(`/tasks/${t.id}`) });
   const update = useAction(updateTask, { success: `${taskId} updated`, onSuccess: () => nav(`/tasks/${taskId}`) });
@@ -147,7 +158,7 @@ function TaskForm({ initial, taskId, currentAssignee }: { initial: TaskInput; ta
                 ))}
               </Select>
             </Field>
-            <Field label="Entity" htmlFor="t-entity" hint="Set automatically from the team, else the assignee.">
+            <Field label="Vertical" htmlFor="t-entity" hint="Set automatically from the department, else the assignee.">
               <Input id="t-entity" value={entityName ?? (taskId ? 'Unchanged' : 'Choose an assignee')} readOnly />
             </Field>
             <Field label="Priority" required htmlFor="t-prio" hint={`Update required every ${windows[0]} h · L1 at ${windows[1]} h · L2 at ${windows[2]} h · L3 at ${windows[3]} h of silence.`}>
@@ -159,6 +170,24 @@ function TaskForm({ initial, taskId, currentAssignee }: { initial: TaskInput; ta
                 ))}
               </Select>
             </Field>
+            {!!look?.standardTasks.length && (
+              <Field label="Standard task" htmlFor="t-std" hint="Optional: recommends the estimate from the standard time list (Settings).">
+                <Select id="t-std" value={std ? String(look.standardTasks.indexOf(std)) : ''} onChange={(e) => pickStandard(e.target.value)}>
+                  <option value="">None</option>
+                  {[...new Set(look.standardTasks.map((s) => s.section))].map((section) => (
+                    <optgroup key={section} label={section}>
+                      {look.standardTasks.map((s, i) =>
+                        s.section === section ? (
+                          <option key={i} value={i}>
+                            {s.name}
+                          </option>
+                        ) : null,
+                      )}
+                    </optgroup>
+                  ))}
+                </Select>
+              </Field>
+            )}
             <div className="grid-2">
               <Field label="Target" htmlFor="t-target" error={fields.target} hint="Optional: how many, e.g. 150.">
                 <Input id="t-target" type="number" min={0} step="any" value={f.target} onChange={(e) => set('target', e.target.value)} invalid={!!fields.target} />
@@ -166,7 +195,27 @@ function TaskForm({ initial, taskId, currentAssignee }: { initial: TaskInput; ta
               <Field label="Unit" htmlFor="t-unit" error={fields.unit} hint="e.g. emails, posts, leads.">
                 <Input id="t-unit" maxLength={40} value={f.unit} onChange={(e) => set('unit', e.target.value)} invalid={!!fields.unit} />
               </Field>
-              <Field label="Estimated hours" required htmlFor="t-est" error={fields.estimatedHours} hint="Expected effort; used for workload.">
+              <Field
+                label="Estimated hours"
+                required
+                htmlFor="t-est"
+                error={fields.estimatedHours}
+                hint={
+                  std && recommended !== null ? (
+                    <>
+                      Recommended {recommended} h: {std.minMinutes === std.maxMinutes ? std.minMinutes : `${std.minMinutes}–${std.maxMinutes}`} min per {std.per > 1 ? `${std.per} ` : ''}
+                      {std.unit}, for {quantity ?? std.per}.{' '}
+                      {String(recommended) !== String(f.estimatedHours) && (
+                        <button type="button" className="link-btn" onClick={() => set('estimatedHours', String(recommended))}>
+                          Use it
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    'Expected effort; used for workload and the over-time check.'
+                  )
+                }
+              >
                 <Input id="t-est" type="number" min={0.25} max={200} step={0.25} value={f.estimatedHours} onChange={(e) => set('estimatedHours', e.target.value)} invalid={!!fields.estimatedHours} />
               </Field>
               <Field label="Purpose" required htmlFor="t-purpose" error={fields.purpose}>

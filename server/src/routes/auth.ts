@@ -8,7 +8,7 @@ import { HttpError, notFound } from '../http/errors.js';
 import { me, requireUser, SESSION_COOKIE, sessionCookieOptions } from '../http/middleware.js';
 import { rateLimit } from '../http/rateLimit.js';
 import { appendAdmin } from '../services/audit.js';
-import { passwordSignIn, recordAttempt } from '../services/auth.js';
+import { passwordRule, passwordSignIn, recordAttempt } from '../services/auth.js';
 import { BAD_TOKEN, requestReset, resetPassword } from '../services/passwordReset.js';
 import { bootstrap } from '../services/me.js';
 
@@ -149,10 +149,7 @@ const forgotSchema = z.object({ email: z.string({ error: EMAIL_MSG }).trim().ema
 const resetSchema = z
   .object({
     token: z.string().default(''),
-    password: z
-      .string({ error: 'Use at least 10 characters.' })
-      .min(10, { error: 'Use at least 10 characters.' })
-      .refine((p) => /[A-Za-z]/.test(p) && /[0-9]/.test(p), { error: 'Use letters and at least one number.' }),
+    password: passwordRule,
     confirm: z.string().default(''),
   })
   .strict()

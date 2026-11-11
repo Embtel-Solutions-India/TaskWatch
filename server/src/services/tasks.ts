@@ -4,7 +4,7 @@
 // hash-chained activity log; admin_log keeps rule, directory and admin changes (DATABASE_DESIGN §3.10).
 import { isCoS } from '@taskwatch/shared/permissions';
 import type { TaskAction } from '@taskwatch/shared/workflow';
-import { taskProgress, type Purpose } from '@taskwatch/shared/performance';
+import { shiftOf, taskProgress, workingHours, type Purpose } from '@taskwatch/shared/performance';
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -13,7 +13,7 @@ import type pg from 'pg';
 import * as clock from '../clock.js';
 import { config } from '../config.js';
 import { HOUR } from '../clock.js';
-import { tx } from '../db/pool.js';
+import { pool, tx, type Db } from '../db/pool.js';
 import { LEVEL_LABELS, type Priority, type Status } from '../domain.js';
 import { applyLevel } from '../engine/engine.js';
 import { routeEscalation } from '../engine/routing.js';
@@ -22,6 +22,7 @@ import { formatInZone } from '../notify/format.js';
 import { assignedMessage, blockedMessage, inAppNotice, type TaskInfo } from '../notify/messages.js';
 import { notify } from '../notify/notify.js';
 import { appendLog } from './activity.js';
+import { appendAdmin } from './audit.js';
 import { assignableUsers, can, canView, relation, taskActions, taskPermissions } from './access.js';
 import { getDirectory, hasRole, type Directory, type DirUser } from './directory.js';
 import { getRuleSet } from './rules.js';
@@ -421,7 +422,7 @@ export async function submitTask(actor: DirUser, taskId: number, input: { note: 
   await withCleanup((written) => act(actor, taskId, 'submit', 'submit this task for review', async ({ c, t, dir, now, rules }) => {
     const { rows } = await c.query<{ n: number }>('select coalesce(max(round), 0)::int + 1 as n from reviews where task_id = $1', [taskId]);
     const round = rows[0]!.n;
-    await storeFinish(c, taskId, finishValues(t, input, now));
+    await finish(c, t, dir, actor, input, now);
     await c.query('insert into reviews (task_id, round, submitted_by, submitted_at, note) values ($1,$2,$3,$4,$5)', [taskId, round, actor.id, now, note]);
     const logId = await appendLog(c, { taskId, actorId: actor.id, kind: 'review_submitted', body: note, before: { status: t.status }, after: { status: 'submitted', round, ...fileMeta(input.files) } });
     for (const file of input.files ?? []) await storeAttachment(c, { taskId, logId, actor, file, now, context: 'review', written });
@@ -440,11 +441,38 @@ export interface FinishReport {
   shortfallReason?: string;
 }
 
+/** A task's working time so far against its standard (D-125); null without an estimate or a clock start. */
+export type TimeUsed = { worked: number; standard: number };
+
+/**
+ * D-125: working hours from the automatic clock start (the scheduled start, else when it was assigned) to `until`, in
+ * the assignee's own zone and shift (their quiet-hours complement, else the workday).
+ */
+export async function timeUsed(
+  t: { id: number; start_at: Date | null; assigned_at: Date | null; estimated_hours: number | null; assignee_id: number },
+  dir: Directory,
+  organizationId: number,
+  until: Date,
+  db: Db = pool,
+): Promise<TimeUsed | null> {
+  const person = dir.get(t.assignee_id);
+  if ((!t.start_at && !t.assigned_at) || !person || t.estimated_hours === null) return null;
+  // Review fixes #3/#4: a reassigned task starts the new assignee's clock at their assignment; a reopened one at the reopen.
+  const { rows: reopen } = await db.query<{ at: Date | null }>("select max(at) as at from activity_log where task_id = $1 and kind = 'reopened'", [t.id]);
+  const start = new Date(Math.max(...[t.start_at, t.assigned_at, reopen[0]?.at].filter((d): d is Date => !!d).map((d) => d.getTime())));
+  const shift = shiftOf(person, await getSettings(organizationId, db));
+  const hours = (from: Date, to: Date) => workingHours(from, to, person.timeZone, shift);
+  // Waiting in review is the reviewer's time, not the assignee's: each round from submission to decision is left out.
+  const { rows } = await db.query<{ submitted_at: Date; decided_at: Date | null }>('select submitted_at, decided_at from reviews where task_id = $1', [t.id]);
+  const inReview = rows.reduce((h, r) => h + hours(new Date(Math.max(r.submitted_at.getTime(), start.getTime())), new Date(Math.min((r.decided_at ?? until).getTime(), until.getTime()))), 0);
+  return { worked: Math.max(0, Math.round((hours(start, until) - inReview) * 100) / 100), standard: t.estimated_hours };
+}
+
 /**
  * Validates a finishing report against the task and returns the values to store. A scored task that ends short of its
- * target, or after its due date, needs a reason (the giver later accepts or not).
+ * target, after its due date, or over its standard working time (D-125) needs a reason (the giver later accepts or not).
  */
-function finishValues(t: any, r: FinishReport, now: Date): { achieved: number | null; result: string | null; shortfallReason: string | null } {
+function finishValues(t: any, r: FinishReport, now: Date, time: TimeUsed | null): { achieved: number | null; result: string | null; shortfallReason: string | null } {
   const f: Record<string, string> = {};
   if (r.achieved !== undefined && t.target === null) f.achieved = 'This task has no target to report against.';
   const achieved = r.achieved ?? t.achieved;
@@ -452,14 +480,37 @@ function finishValues(t: any, r: FinishReport, now: Date): { achieved: number | 
   const shortfallReason = r.shortfallReason?.trim() || t.shortfall_reason || null;
   const short = t.target !== null && (achieved ?? 0) < t.target;
   const late = now.getTime() > t.due_at.getTime();
-  if (t.scored && (short || late) && !shortfallReason) f.shortfallReason = 'Explain the shortfall or delay.';
+  const over = !!time && time.worked > time.standard;
+  if (t.scored && (short || late || over) && !shortfallReason) {
+    f.shortfallReason = over && !short && !late ? `Took ${time!.worked.toFixed(1)} working hours against a ${time!.standard} h standard: explain the delay.` : 'Explain the shortfall or delay.';
+  }
   if (Object.keys(f).length) throw invalid(f);
   guardText(result, shortfallReason);
   return { achieved, result, shortfallReason };
 }
 
-async function storeFinish(c: pg.PoolClient, taskId: number, v: ReturnType<typeof finishValues>) {
-  await c.query('update tasks set achieved = $2, result = $3, shortfall_reason = $4 where id = $1', [taskId, v.achieved, v.result, v.shortfallReason]);
+/** A comment and its activity entry, inside the caller's transaction (CMT-01; also D-125's reason "in chat"). */
+export async function insertComment(c: pg.PoolClient, m: { taskId: number; actorId: number; body: string; now: Date; parentId?: number | null }): Promise<{ id: number; logId: number }> {
+  const logId = await appendLog(c, { taskId: m.taskId, actorId: m.actorId, kind: 'comment', body: m.body, after: m.parentId ? { parentId: m.parentId } : null });
+  const { rows } = await c.query<{ id: number }>(`insert into comments (task_id, author_id, parent_id, body, created_at, log_id) values ($1,$2,$3,$4,$5,$6) returning id`, [
+    m.taskId,
+    m.actorId,
+    m.parentId ?? null,
+    m.body,
+    m.now,
+    logId,
+  ]);
+  return { id: rows[0]!.id, logId };
+}
+
+/** Store the finishing report; a newly given reason is also posted to the task's comments (D-125). */
+async function finish(c: pg.PoolClient, t: any, dir: Directory, actor: DirUser, r: FinishReport, now: Date) {
+  const v = finishValues(t, r, now, t.scored ? await timeUsed(t, dir, actor.organizationId, now, c) : null); // review fix #8
+  await c.query('update tasks set achieved = $2, result = $3, shortfall_reason = $4 where id = $1', [t.id, v.achieved, v.result, v.shortfallReason]);
+  if (v.shortfallReason && v.shortfallReason !== t.shortfall_reason) {
+    await insertComment(c, { taskId: t.id, actorId: actor.id, body: `Reason for delay or shortfall: ${v.shortfallReason}`, now });
+  }
+  return v;
 }
 
 async function closeAsCompleted(c: pg.PoolClient, taskId: number, actor: DirUser, now: Date) {
@@ -479,8 +530,7 @@ export async function completeTask(actor: DirUser, taskId: number, noteInput = '
     'complete',
     'mark this task done',
     async ({ c, t, dir, now, rules }) => {
-      const v = finishValues(t, report, now);
-      await storeFinish(c, taskId, v);
+      const v = await finish(c, t, dir, actor, report, now);
       await closeAsCompleted(c, taskId, actor, now);
       await appendLog(c, { taskId, actorId: actor.id, kind: 'completed', body: note || null, before: { status: t.status, achieved: t.achieved }, after: { status: 'completed', ...v } });
       if (t.assigner_id !== actor.id) await notifyUser(c, dir, rules, t.assigner_id, 'completed', taskId, `Done: “${t.title}”`, `${actor.name} marked it done.${note ? ` ${note}` : ''}`);
@@ -587,6 +637,17 @@ export async function reassignTask(actor: DirUser, taskId: number, input: { toId
     if (reason.length < 5) f.reason = 'Give a reason for the reassignment.';
     if (Object.keys(f).length) throw invalid(f);
     await doReassign(x, actor, input.toId!, reason);
+  });
+}
+
+/**
+ * D-133: the giver discards a never-assigned draft. Nobody had it, so it simply disappears from every screen; the row
+ * and its log stay (never deleted, 009), and the admin audit records the discard.
+ */
+export async function discardDraft(actor: DirUser, taskId: number): Promise<void> {
+  await act(actor, taskId, 'discard', 'delete this draft', async ({ c, t, now }) => {
+    await c.query('update tasks set discarded_at = $2 where id = $1', [taskId, now]);
+    await appendAdmin(c, { actorId: actor.id, kind: 'task.draft_discarded', target: `task:${taskId}`, targetType: 'task', before: { title: t.title, status: t.status } });
   });
 }
 

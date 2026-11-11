@@ -1,7 +1,8 @@
 // Pure tests for the performance formulas (PERFORMANCE-FRD §5; owner's worked examples, 2026-11-06).
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { combine, isOnTime, isRatable, periodBounds, personScore, rankRows, taskOutcome, taskProgress, workload, type ScoredTask } from '@taskwatch/shared/performance';
+import { averageScore, isOnTime, isRatable, periodBounds, personScore, rankRows, shiftOf, taskOutcome, taskProgress, workingHours, workload, type ScoredTask } from '@taskwatch/shared/performance';
+import { DEFAULT_STANDARD_TASKS, recommendedHours } from '@taskwatch/shared/standardTasks';
 
 const H = 3_600_000;
 const FROM = new Date('2026-11-01T00:00:00Z');
@@ -34,18 +35,9 @@ describe('PERF outcome, timeliness, quality and score', () => {
     assert.equal(s.quality, 90);
   });
 
-  it('score = O×0.5 + T×0.2 + Q×0.3 (owner leaderboard; Nusrat is 90.0)', () => {
-    near(combine(92, 90, 95), 92.5);
-    near(combine(88, 95, 90), 90.0);
-    near(combine(85, 85, 92), 87.1);
-    near(combine(78, 80, 85), 80.5);
-  });
-
-  it('no quality reviews: weights rescale to the parts present and the person is flagged', () => {
-    near(combine(80, 100, null), (80 * 0.5 + 100 * 0.2) / 0.7);
+  it('no quality reviews: the person is flagged', () => {
     const s = personScore([task({ target: 10, achieved: 8 })], FROM, TO, NOW);
     assert.ok(s.flags.includes('no_quality_reviews'));
-    assert.equal(combine(null, null, null), null);
   });
 
   it('Review Focus 1: achieved above target caps at 100; an open task past due with no achieved scores 0', () => {
@@ -88,6 +80,35 @@ describe('PERF outcome, timeliness, quality and score', () => {
     const s = personScore([task({ target: 10, achieved: 10, priority: 'critical' }), task({ target: 10, achieved: 10, completedAt: late, priority: 'low' })], FROM, TO, NOW);
     assert.equal(s.efficiency, 50);
     assert.deepEqual(s.efficiencyByPressure, { high: 100, normal: 0 });
+  });
+});
+
+describe('D-124: the leaderboard ranks on the weighted Outcome Score only', () => {
+  const late = new Date(DUE.getTime() + 5 * H);
+
+  it('score is the Outcome Score; late work and low quality do not move it (they stay for display)', () => {
+    const s = personScore([task({ target: 10, achieved: 10, completedAt: late, reviewed: true, qualityScore: 40 }), task({ target: 50, achieved: 40 }), task({ target: 5, achieved: 4 })], FROM, TO, NOW);
+    near(s.score, 86.667);
+    assert.equal(s.score, s.outcome);
+    near(s.timeliness, 66.667);
+    assert.equal(s.quality, 40);
+  });
+
+  it('equal weights by default reproduce the owner example: (100 + 80 + 80) ÷ 3 = 86.67', () => {
+    const tasks = [task({ target: 10, achieved: 10, priority: 'critical' }), task({ target: 50, achieved: 40 }), task({ target: 5, achieved: 4, priority: 'low' })];
+    near(personScore(tasks, FROM, TO, NOW).outcome, 86.667);
+    near(personScore(tasks, FROM, TO, NOW, { critical: 1, high: 1, normal: 1, low: 1 }).outcome, 86.667);
+  });
+
+  it('Σ(outcome × weight) ÷ Σ(weight), the weight coming from the task priority', () => {
+    const tasks = [task({ target: 10, achieved: 10, priority: 'critical' }), task({ target: 50, achieved: 40 }), task({ target: 5, achieved: 4 })];
+    near(personScore(tasks, FROM, TO, NOW, { critical: 3, high: 2, normal: 1, low: 1 }).outcome, (100 * 3 + 80 + 80) / 5);
+  });
+
+  it('an accepted shortfall leaves the denominator; a task without a target counts its rated outcome', () => {
+    const w = { critical: 3, high: 2, normal: 1, low: 1 };
+    const s = personScore([task({ target: 10, achieved: 10 }), task({ target: 10, achieved: 2, priority: 'critical', shortfallAccepted: true }), task({ outcomeScore: 70, priority: 'high' })], FROM, TO, NOW, w);
+    near(s.outcome, (100 * 1 + 70 * 2) / 3);
   });
 });
 
@@ -179,5 +200,53 @@ describe('PERF final review C1: a reviewed task is on time when it was submitted
     const t = task({ status: 'submitted', completedAt: null, submittedAt: new Date(DUE.getTime() - H) });
     assert.equal(isOnTime(t, NOW), true);
     assert.equal(isOnTime({ ...t, submittedAt: new Date(DUE.getTime() + H) }, NOW), false, 'submitted late is late');
+  });
+});
+
+describe('D-125: working hours and the standard-task catalog', () => {
+  const NY = 'America/New_York';
+  const IST = 'Asia/Kolkata';
+  const day = { start: '09:00', end: '18:00' };
+  const at = (iso: string) => new Date(iso);
+
+  it('counts only the shift on weekdays: Mon 16:00 → Tue 11:00 New York is 2 + 2 = 4 h', () => {
+    assert.equal(workingHours(at('2026-11-09T21:00:00Z'), at('2026-11-10T16:00:00Z'), NY, day), 4);
+  });
+
+  it('skips the weekend: Fri 17:00 → Mon 10:00 New York is 1 + 1 = 2 h', () => {
+    assert.equal(workingHours(at('2026-11-13T22:00:00Z'), at('2026-11-16T15:00:00Z'), NY, day), 2);
+  });
+
+  it('a night shift (20:00–08:00) crosses midnight: Mon 19:00 → Tue 09:00 IST is 12 h', () => {
+    assert.equal(workingHours(at('2026-11-09T13:30:00Z'), at('2026-11-10T03:30:00Z'), IST, { start: '20:00', end: '08:00' }), 12);
+  });
+
+  it('outside the shift, or a reversed range, counts nothing', () => {
+    assert.equal(workingHours(at('2026-11-09T23:30:00Z'), at('2026-11-10T13:00:00Z'), NY, day), 0, '18:30 → 08:00');
+    assert.equal(workingHours(at('2026-11-10T16:00:00Z'), at('2026-11-09T16:00:00Z'), NY, day), 0);
+  });
+
+  it('own quiet hours (D-105) give the shift; otherwise the organization workday', () => {
+    assert.deepEqual(shiftOf({ quietStart: '08:00', quietEnd: '20:00' }, { workdayStart: '09:00', workdayEnd: '18:00' }), { start: '20:00', end: '08:00' });
+    assert.deepEqual(shiftOf({ quietStart: null, quietEnd: null }, { workdayStart: '09:00', workdayEnd: '18:00' }), { start: '09:00', end: '18:00' });
+    // Review fix: a day worker's do-not-disturb at night (22:00–07:00) is not a night shift.
+    assert.deepEqual(shiftOf({ quietStart: '22:00', quietEnd: '07:00' }, { workdayStart: '09:00', workdayEnd: '18:00' }), { start: '09:00', end: '18:00' });
+  });
+
+  it('the catalog holds every PDF row, and the recommendation is the average scaled to the quantity', () => {
+    assert.equal(DEFAULT_STANDARD_TASKS.length, 82);
+    const calls = DEFAULT_STANDARD_TASKS.find((t) => t.name === '100 cold calls')!;
+    assert.equal(recommendedHours(calls), 6.25, '(240 + 498) ÷ 2 = 369 min ≈ 6.15 h → 6.25');
+    assert.equal(recommendedHours(calls, 50), 3);
+    const post = DEFAULT_STANDARD_TASKS.find((t) => t.name === 'Social media post creation and upload')!;
+    assert.equal(recommendedHours(post, 10), 10);
+    assert.equal(recommendedHours(DEFAULT_STANDARD_TASKS.find((t) => t.name === 'CRM lead entry')!), 0.25, 'never under a quarter hour');
+  });
+});
+
+describe('Leaderboard analytics', () => {
+  it('a team average leaves out people without a score and rounds to one decimal', () => {
+    assert.deepEqual(averageScore([100, 80, null, 86.67]), { average: 88.9, scored: 3 });
+    assert.deepEqual(averageScore([null, null]), { average: null, scored: 0 });
   });
 });
