@@ -53,6 +53,7 @@ function AuthFrame({
           {sub && <p className="muted">{sub}</p>}
           {children}
         </div>
+        <p className="auth-credit">A product of Embtel Solutions Inc</p>
       </div>
       <aside className="auth-side auth-art" aria-hidden>
         {/* Owner's sign-in illustration (2026-11-11, transparent): "Stay on top of work, never miss a deadline." is part of the image. */}
