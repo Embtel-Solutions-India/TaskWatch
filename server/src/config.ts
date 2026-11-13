@@ -74,6 +74,10 @@ export const config = {
 
   smtp: {
     enabled: Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS),
+    // Owner 2026-11-13: automated email (escalations, reminders, digests from the queue) goes out for real only in
+    // production; a local server simulates it (delivery log only) so dev escalations never reach real inboxes. Emails a
+    // person sends by hand (onboarding, password reset) still go out. EMAIL_AUTOMATED_LOCALLY=true sends both locally.
+    automated: Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS) && (isProd || env.EMAIL_AUTOMATED_LOCALLY === 'true'),
     host: env.SMTP_HOST ?? '',
     port: Number(env.SMTP_PORT ?? 465),
     user: env.SMTP_USER ?? '',

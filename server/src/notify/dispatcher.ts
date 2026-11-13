@@ -94,7 +94,7 @@ export async function dispatchDue(limit = 100): Promise<number> {
           ]);
           continue;
         }
-        const result = n.channel === 'whatsapp' ? await sendWhatsApp(msg) : await sendEmail(msg, n.event === 'digest' ? n.body : await taskHtml(n));
+        const result = n.channel === 'whatsapp' ? await sendWhatsApp(msg) : await sendEmail(msg, n.event === 'digest' ? n.body : await taskHtml(n), true);
         await pool.query(`update notifications set status = $2, sent_at = $3, provider_id = $4, error = null where id = $1`, [
           n.id,
           result.simulated ? 'simulated' : 'sent',

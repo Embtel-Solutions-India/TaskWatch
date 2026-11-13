@@ -58,9 +58,12 @@ export async function sendWhatsApp(msg: OutgoingMessage): Promise<SendResult> {
 
 let transport: Transporter | null = null;
 
-/** Email over SMTP (Brevo relay), sender name "TaskWatch". Without `html`, the body goes in the plain branded shell. */
-export async function sendEmail(msg: OutgoingMessage, html?: string): Promise<SendResult> {
-  if (!config.smtp.enabled) return { simulated: true, providerId: null };
+/**
+ * Email over SMTP (Brevo relay), sender name "TaskWatch". Without `html`, the body goes in the plain branded shell.
+ * `automated`: sent by the alert queue, not by a person; simulated outside production (config.smtp.automated).
+ */
+export async function sendEmail(msg: OutgoingMessage, html?: string, automated = false): Promise<SendResult> {
+  if (!(automated ? config.smtp.automated : config.smtp.enabled)) return { simulated: true, providerId: null };
   // Nodemailer resolves hosts with dns.resolve (queries the DNS server directly), which times out on networks where only
   // the OS resolver works. Resolve with dns.lookup (OS resolver) instead; TLS still verifies the real hostname.
   // ponytail: IP fixed for the process lifetime; re-resolve per send if the relay's address ever rotates mid-run.
