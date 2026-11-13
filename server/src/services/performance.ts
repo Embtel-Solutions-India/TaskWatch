@@ -3,12 +3,15 @@
 // in the organization with view_org_reports. A team or person outside that scope is reported as missing (404).
 import {
   averageScore,
+  baselineDue,
   isEligible,
   isOnTime,
   periodBounds,
   personScore,
   rankRows,
   taskOutcome,
+  taskQuality,
+  taskTimeliness,
   workload,
   type Priority,
   type ScoredTask,
@@ -82,11 +85,15 @@ async function loadTeam(viewer: DirUser, dir: Directory, teamId: number) {
 async function scoredTasks(organizationId: number, userIds: number[], from: Date, to: Date) {
   const { rows } = await pool.query(
     `select t.id, t.title, t.assignee_id, t.status, t.due_at, t.completed_at, t.target, t.achieved, t.outcome_score, t.quality_score,
-            t.shortfall_accepted, t.scored, t.priority,
-            t.review_required and t.quality_score is not null as reviewed,
+            t.shortfall_accepted, t.scored, t.priority, t.estimated_hours,
+            -- D-173: Quality comes from the review history, so "reviewed" = it went through review and was approved.
+            t.review_required and exists (select 1 from reviews r where r.task_id = t.id and r.decision = 'approved') as reviewed,
             coalesce((select max(a.assigned_at) from assignments a where a.task_id = t.id and a.assignee_id = t.assignee_id), t.assigned_at) > t.due_at
               as reassigned_after_due,
-            (select count(*)::int from reviews r where r.task_id = t.id and r.decision = 'changes_requested') as rework,
+            (select count(*)::int from reviews r where r.task_id = t.id and r.decision in ('changes_requested', 'rejected')) as rework,
+            -- D-173 fairness: every deadline change in order; 'extension' = the assignee's own approved request.
+            (select coalesce(json_agg(json_build_object('before', l.before->>'dueAt', 'after', l.after->>'dueAt', 'as', l.after->>'as') order by l.seq), '[]')
+               from activity_log l where l.task_id = t.id and l.kind = 'due_change') as due_changes,
             (select r.submitted_at from reviews r where r.task_id = t.id and (r.decision = 'approved' or (r.decision is null and t.status = 'submitted'))
               order by r.round desc limit 1) as submitted_at
        from tasks t
@@ -94,7 +101,13 @@ async function scoredTasks(organizationId: number, userIds: number[], from: Date
         and t.due_at >= $3 and t.due_at < $4`,
     [organizationId, userIds, from, to],
   );
-  return rows.map((r) => ({
+  return rows.map((r) => {
+    // Entries missing a date (hand-made history) are skipped; with no usable original the current due date stands.
+    const changes = (r.due_changes as { before: string | null; after: string | null; as: string | null }[]).filter((c) => c.after);
+    const baselineDueAt = changes.length && changes[0]!.before
+      ? baselineDue(new Date(changes[0]!.before), changes.map((c) => ({ dueAt: new Date(c.after!), own: c.as === 'extension' })))
+      : null;
+    return {
     title: r.title as string,
     assigneeId: r.assignee_id as number,
     task: {
@@ -113,8 +126,11 @@ async function scoredTasks(organizationId: number, userIds: number[], from: Date
       priority: r.priority as Priority,
       reworkCount: r.rework,
       submittedAt: r.submitted_at ?? null,
+      estimatedHours: r.estimated_hours === null ? null : Number(r.estimated_hours),
+      baselineDueAt,
     } satisfies ScoredTask,
-  }));
+    };
+  });
 }
 
 /** GET /api/performance/leaderboard */
@@ -163,7 +179,8 @@ export async function personBreakdown(viewer: DirUser, dir: Directory, personId:
       completedAt: task.completedAt,
       outcome,
       onTime: isOnTime(task, now),
-      quality: task.qualityScore,
+      timeliness: taskTimeliness(task, now),
+      quality: taskQuality(task),
       reviewed: task.reviewed,
       reworkCount: task.reworkCount,
       weight: weights[task.priority],

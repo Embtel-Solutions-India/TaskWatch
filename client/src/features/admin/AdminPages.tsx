@@ -583,7 +583,7 @@ export function SettingsPage() {
           </Field>
         </div>
       </Card>
-      <Card title="Performance scoring" sub="The leaderboard ranks on the Outcome Score: Σ(task outcome % × weight) ÷ Σ(weight). Each task weighs by its priority; all 1 counts every task equally.">
+      <Card title="Performance scoring" sub="The leaderboard ranks on the Performance score: Outcome 50 %, Quality 30 %, Timeliness 20 %. These priority weights set how much each task counts in the Outcome part, Σ(task outcome % × weight) ÷ Σ(weight); all 1 counts every task equally.">
         <div className="grid-2">
           {PRIORITIES.map((p) => (
             <Field key={p} label={`${PRIORITY_LABEL[p]} task weight`} htmlFor={`st-w-${p}`} error={f[`priorityWeights.${p}`]}>

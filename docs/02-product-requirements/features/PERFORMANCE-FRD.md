@@ -110,22 +110,22 @@ Per person: **weighted average** `O = Σ(task outcome × weight) ÷ Σ(weight)`;
 
 **Whose task it is** [CALL]: a task scores for the person assigned **when it was completed** (or on its due date, if still open then). If it was reassigned **after** its due date had already passed, it is excluded from the new assignee's Timeliness (they inherited a late task) but counts in their Outcome and Quality.
 
-### 5.4 Timeliness T (0–100) [OWNER formula]
-`T = tasks completed on or before their due date ÷ eligible tasks × 100`.
-- Due date = latest approved one [OWNER].
-- Tasks not yet due are excluded [OWNER].
-- Accepted delays are excluded (Blocked is not automatically late) [OWNER].
-- An open task past its due date counts as late, **including a Blocked one**, unless the task giver accepts the delay. The giver may accept a delay while the task is still open once a reason exists (the block reason counts as one). [CALL]
-- On time / late only; no graduated penalty [OWNER].
+### 5.4 Timeliness T (0–100) [OWNER, D-173]
+Per task: **100** when delivered on or before the deadline; when late, `100 − hours late ÷ estimated hours × 100`, minimum 0 (2 h late on a 4 h estimate = 50). No estimate: late = 0. Delivered = the approved round's submission (review time never makes the assignee late), else completion; an open task past due is graded up to now. Per person: the average over counted tasks.
+- **Fairness [OWNER, D-173]:** the deadline is the one **before the assignee's own approved extensions**. A deadline moved by the task giver (direct change, reassignment, reopen) resets it without penalty. Worked out from the `due_change` log (`after.as = 'extension'` marks the assignee's request) by `baselineDue`.
+- Tasks not yet due are excluded; accepted delays are excluded; a task reassigned after its due date is out of timeliness [OWNER].
+- Superseded (to 2026-11-13): on time / late only, `T = on-time tasks ÷ eligible × 100`.
 
-### 5.5 Quality Q (0–100) [OWNER formula]
-`Q = average qualityScore of eligible tasks that were reviewed`. Unreviewed tasks are **pending review**, never 100 [OWNER]. Rework rounds ("changes requested") do not lower Q directly; the reviewer's final score is what counts, and rework count is shown beside it. [CALL]
+### 5.5 Quality Q (0–100) [OWNER, D-173]
+Per reviewed task (review required and approved): `100 − 40 × returns`, minimum 0, where a return is a review decided **changes requested** or **rejected** (accepted first time = 100, once returned = 60). Unreviewed tasks never count as 100. The reviewer no longer types a quality number. Per person: the average.
+- Superseded (to 2026-11-13): the average of the reviewer's 0–100 quality score.
 
-### 5.6 Performance score S [OWNER, D-124]
-**Since 2026-11-11: `S = O`, the weighted Outcome Score alone.** The leaderboard ranks on it. Timeliness, Quality and Efficiency are still computed and shown for context, but do not change the rank.
-- Superseded rule (2026-11-06 to 2026-11-10): `S = O × 0.50 + T × 0.20 + Q × 0.30`. Its code (`combine()`, `WEIGHTS`) and tests were removed on 2026-11-11 with the owner's approval.
+### 5.6 Performance score S [OWNER, D-173]
+**Since 2026-11-13: `S = O × 0.50 + Q × 0.30 + T × 0.20`** (fixed weights; the priority weights of D-124 still weight tasks inside O). A part with no data in the period (e.g. no reviewed task) is left out and the rest re-weighted, so nobody gets 0 or 100 for work never reviewed; without O there is no score. The leaderboard ranks on S and shows O, Q and T beside it.
+- Superseded rules: `S = O` alone (D-124, 2026-11-11 to 2026-11-13); `S = O × 0.50 + T × 0.20 + Q × 0.30` with binary T and reviewer-rated Q (2026-11-06 to 2026-11-10).
 - The ranking rule and the priority weights in force are printed under the leaderboard and on the person page.
 - People with **fewer than 5 eligible tasks** in the period are listed but **not ranked**. [CALL]
+- Owner's blog example: O 100, Q 60 (one return), T 50 (2 h late on 4 h) → **78**.
 
 Worked check (owner's example, D-124): 10/10, 40/50, 4/5 with equal weights → (100 + 80 + 80) ÷ 3 = **86.67**. With Critical 3 on the first task: (300 + 80 + 80) ÷ 5 = 92. (`server/test/performance.test.ts`)
 

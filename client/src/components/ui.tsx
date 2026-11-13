@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { LEVEL_LABEL, LEVEL_SHORT, PRIORITY_LABEL, ROLE_LABEL, STATUS_LABEL } from '../constants';
 import type { Priority, Role, Status } from '../types';
@@ -7,7 +8,7 @@ import { Icon, type IconName } from './icons';
 
 /* ---------------- Buttons ---------------- */
 
-type BtnVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'subtle';
+type BtnVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-soft' | 'subtle';
 export function Button({ variant = 'secondary', size, icon, iconRight, loading, children, className, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: BtnVariant; size?: 'sm' | 'lg'; icon?: IconName; iconRight?: IconName; loading?: boolean }) {
   return (
     <button type="button" className={cx('btn', `btn-${variant}`, size && `btn-${size}`, className)} disabled={loading || rest.disabled} aria-busy={loading || undefined} {...rest}>
@@ -252,14 +253,62 @@ export function AccessDenied({ message }: { message?: string }) {
   );
 }
 
+/**
+ * Owner request: banners float over the page (top right) with a × instead of taking space between sections.
+ * Page banners portal into one shared stack, a manual popover, so they also show above an open <dialog>.
+ * A banner inside a dialog floats from a stack inside that dialog: a modal dialog makes everything outside it
+ * unclickable, so its banner's buttons (e.g. "Apply to open tasks") must live in the dialog.
+ */
+let bannerStack: HTMLDivElement | null = null;
+function dialogBannerStack(dialog: HTMLDialogElement): HTMLDivElement {
+  let s = dialog.querySelector<HTMLDivElement>(':scope > .banner-stack');
+  if (!s) {
+    s = document.createElement('div');
+    s.className = 'banner-stack';
+    dialog.appendChild(s);
+  }
+  return s;
+}
+function raiseBannerStack(): HTMLDivElement {
+  if (!bannerStack) {
+    bannerStack = document.createElement('div');
+    bannerStack.className = 'banner-stack';
+    bannerStack.setAttribute('popover', 'manual');
+    document.body.appendChild(bannerStack);
+  }
+  // Re-showing moves the stack to the top of the top layer, above whichever dialog opened last.
+  if (bannerStack.showPopover) {
+    if (bannerStack.matches(':popover-open')) bannerStack.hidePopover();
+    bannerStack.showPopover();
+  }
+  return bannerStack;
+}
+
 export function Banner({ tone = 'info', icon, children, action }: { tone?: 'info' | 'warn' | 'danger' | 'ok'; icon?: IconName; children: ReactNode; action?: ReactNode }) {
-  return (
+  const [closed, setClosed] = useState(false);
+  const [host, setHost] = useState<HTMLDivElement | null>(null);
+  const anchor = useRef<HTMLSpanElement>(null);
+  // A new message (e.g. a different sign-in error) shows again even after the last one was closed.
+  const text = typeof children === 'string' ? children : '';
+  useEffect(() => setClosed(false), [text]);
+  useLayoutEffect(() => {
+    if (closed) return;
+    const dialog = anchor.current?.closest('dialog');
+    setHost(dialog ? dialogBannerStack(dialog) : raiseBannerStack());
+  }, [closed]);
+  const marker = <span ref={anchor} hidden />;
+  if (closed || !host) return marker;
+  return <>{marker}{createPortal(
     <div className={cx('banner', `banner-${tone}`)} role={tone === 'danger' ? 'alert' : 'status'}>
       <Icon name={icon ?? (tone === 'ok' ? 'circle-check' : tone === 'info' ? 'info' : 'alert')} size={16} />
       <div className="banner-text">{children}</div>
       {action}
-    </div>
-  );
+      <button type="button" className="banner-close" aria-label="Close" onClick={() => setClosed(true)}>
+        <Icon name="x" size={14} />
+      </button>
+    </div>,
+    host,
+  )}</>;
 }
 
 /* ---------------- Forms ---------------- */
@@ -413,7 +462,8 @@ export function TabPanel({ id, children }: { id: string; children: ReactNode }) 
 
 /* ---------------- Dialog & Drawer (native <dialog>: focus trap + Esc for free) ---------------- */
 
-export function Dialog({ open, onClose, title, description, children, footer, size, drawer }: { open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children: ReactNode; footer?: ReactNode; size?: 'sm' | 'lg'; drawer?: boolean }) {
+/** `tone` marks a question (confirm, delete, cancel): the header gets the warning mark so every "are you sure" looks the same. */
+export function Dialog({ open, onClose, title, description, children, footer, size, drawer, tone }: { open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children: ReactNode; footer?: ReactNode; size?: 'sm' | 'lg'; drawer?: boolean; tone?: 'warn' | 'danger' }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   useEffect(() => {
@@ -433,12 +483,23 @@ export function Dialog({ open, onClose, title, description, children, footer, si
         onClose();
       }}
       onMouseDown={(e) => {
-        if (e.target === ref.current) onClose();
+        if (e.target !== ref.current) return;
+        // Toasts float above the dialog but are unclickable under a modal, so a click on one lands here: not a backdrop click.
+        const onToast = [...document.querySelectorAll('.toasts .toast')].some((t) => {
+          const r = t.getBoundingClientRect();
+          return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+        });
+        if (!onToast) onClose();
       }}
     >
       <div className="dialog-inner">
         <header className="dialog-head">
-          <div>
+          {tone && (
+            <span className={cx('dialog-mark', `dialog-mark-${tone}`)} aria-hidden>
+              <Icon name="alert" size={20} />
+            </span>
+          )}
+          <div className="dialog-title">
             <h2 id={titleId}>{title}</h2>
             {description && <p>{description}</p>}
           </div>
@@ -451,17 +512,18 @@ export function Dialog({ open, onClose, title, description, children, footer, si
   );
 }
 
-export function ConfirmDialog({ open, onClose, onConfirm, title, children, confirmLabel = 'Confirm', danger, loading }: { open: boolean; onClose: () => void; onConfirm: () => void; title: string; children: ReactNode; confirmLabel?: string; danger?: boolean; loading?: boolean }) {
+export function ConfirmDialog({ open, onClose, onConfirm, title, children, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger, loading }: { open: boolean; onClose: () => void; onConfirm: () => void; title: string; children: ReactNode; confirmLabel?: string; cancelLabel?: string; danger?: boolean; loading?: boolean }) {
   return (
     <Dialog
       open={open}
       onClose={onClose}
       title={title}
       size="sm"
+      tone={danger ? 'danger' : 'warn'}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {cancelLabel}
           </Button>
           <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm} loading={loading}>
             {confirmLabel}
@@ -633,6 +695,16 @@ export const useToast = () => useContext(ToastCtx);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // A modal <dialog> sits in the browser's top layer, above any z-index, so toasts became invisible behind it
+  // (e.g. "Save" in a dialog looked like it did nothing). As a manual popover the stack joins the top layer too;
+  // re-showing it after each new toast puts it above whichever dialog opened last.
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el?.showPopover) return;
+    if (el.matches(':popover-open')) el.hidePopover();
+    if (toasts.length) el.showPopover();
+  }, [toasts]);
   const push = useCallback((t: Omit<Toast, 'id'>) => {
     const id = Date.now() + Math.random();
     setToasts((x) => [...x.slice(-3), { ...t, id }]);
@@ -641,7 +713,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastCtx.Provider value={push}>
       {children}
-      <div className="toasts" aria-live="polite" aria-atomic="false">
+      <div ref={ref} popover="manual" className="toasts" aria-live="polite" aria-atomic="false">
         {toasts.map((t) => (
           <div key={t.id} className={cx('toast', `toast-${t.tone}`)} role={t.tone === 'error' ? 'alert' : 'status'}>
             <Icon name={t.tone === 'success' ? 'circle-check' : t.tone === 'error' ? 'alert' : 'info'} size={16} />

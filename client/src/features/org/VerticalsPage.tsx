@@ -106,7 +106,8 @@ function WorktimeDialog({ vertical, onClose }: { vertical: Department; onClose: 
   const w0 = vertical.worktime ?? { timeZone: null, quietHours: null, workDays: null, workStart: null, workEnd: null };
   const [w, setW] = useState<Worktime>(w0);
   const [saved, setSaved] = useState(false);
-  const save = useAction(() => adminServer.setWorktime(vertical.id, w), { success: 'Working time saved; members follow it now.', onSuccess: () => setSaved(true) });
+  const [confirmApply, setConfirmApply] = useState(false);
+  const save = useAction(() => adminServer.setWorktime(vertical.id, w), { success: 'Working time saved; members follow it now.', onSuccess: () => (setSaved(true), setConfirmApply(true)) });
   const apply = useAction(() => applyPolicy(vertical.id), { success: (x) => `${x.updated} open task${x.updated === 1 ? '' : 's'} rescheduled.`, onSuccess: onClose });
   const days = w.workDays ?? [];
   const toggleDay = (d: number) => {
@@ -156,10 +157,13 @@ function WorktimeDialog({ vertical, onClose }: { vertical: Department; onClose: 
             <Field label="Quiet until" htmlFor="wt-qe"><Input id="wt-qe" type="time" value={w.quietHours.end} onChange={(e) => setW({ ...w, quietHours: { ...w.quietHours!, end: e.target.value } })} /></Field>
           </div>
         )}
-        <Banner tone="info" action={saved ? <Button size="sm" loading={apply.pending} onClick={() => apply.run()}>Apply to open tasks</Button> : undefined}>
+        <Banner tone="info" action={saved ? <Button size="sm" onClick={() => setConfirmApply(true)}>Apply to open tasks</Button> : undefined}>
           Non-Critical tasks count escalation time in these working hours. Open tasks keep their escalation times until you apply the change to them.
         </Banner>
       </div>
+      <ConfirmDialog open={confirmApply} onClose={() => setConfirmApply(false)} onConfirm={() => apply.run()} title="Working time saved. Apply it to open tasks?" confirmLabel="Apply to open tasks" cancelLabel="Not now" loading={apply.pending}>
+        <p>Every open task in {vertical.name} gets new escalation times from these working hours, and may escalate at once. This is recorded in the audit log.</p>
+      </ConfirmDialog>
     </Dialog>
   );
 }

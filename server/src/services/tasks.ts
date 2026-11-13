@@ -636,9 +636,9 @@ export async function reviewTask(
       const { rows } = await c.query<{ id: number; round: number }>('select id, round from reviews where task_id = $1 and decision is null', [taskId]);
       const round = rows[0]!;
       if (input.decision === 'approved' && t.scored) {
-        // PERF: approval carries the reviewer's quality score, and the outcome score when there is no target.
+        // PERF: approval carries the outcome score when there is no target. D-173: Quality is worked out from the returns,
+        // so a quality score is optional (still stored if sent; no longer used in the score).
         const f: Record<string, string> = {};
-        if (input.qualityScore === undefined) f.qualityScore = 'Give a quality score from 0 to 100.';
         if (t.target === null && input.outcomeScore === undefined) f.outcomeScore = 'Give an outcome score from 0 to 100.';
         if (input.shortfallAccepted !== undefined && !t.shortfall_reason) f.shortfallAccepted = 'There is no shortfall or delay reason to decide on.';
         if (Object.keys(f).length) throw invalid(f);

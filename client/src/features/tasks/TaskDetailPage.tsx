@@ -60,10 +60,10 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
   if (can('decide_extension')) primary.push(<Button key="dec" icon="clock" onClick={() => setDialog('decide')}>Decide extension</Button>);
   if (can('ack_escalation')) primary.push(<Button key="esc" icon="check" onClick={() => setDialog('ack_escalation')}>Acknowledge escalation</Button>);
   // D-133: the giver's own actions are buttons, not hidden in the menu.
-  if (can('edit')) primary.push(<Button key="edit" variant="ghost" icon="edit" onClick={() => nav(`/tasks/${t.id}/edit`)}>Edit</Button>);
-  if (can('reassign')) primary.push(<Button key="reas" variant="ghost" icon="users" onClick={() => setDialog('reassign')}>Reassign</Button>);
-  if (can('discard')) primary.push(<Button key="disc" variant="ghost" icon="trash" onClick={() => setDialog('discard')}>Delete draft</Button>);
-  else if (can('cancel')) primary.push(<Button key="canc" variant="ghost" icon="x" onClick={() => setDialog('cancel')}>Cancel task</Button>);
+  if (can('edit')) primary.push(<Button key="edit" variant="secondary" icon="edit" onClick={() => nav(`/tasks/${t.id}/edit`)}>Edit</Button>);
+  if (can('reassign')) primary.push(<Button key="reas" variant="secondary" icon="users" onClick={() => setDialog('reassign')}>Reassign</Button>);
+  if (can('discard')) primary.push(<Button key="disc" variant="danger-soft" icon="trash" onClick={() => setDialog('discard')}>Delete draft</Button>);
+  else if (can('cancel')) primary.push(<Button key="canc" variant="danger-soft" icon="x" onClick={() => setDialog('cancel')}>Cancel task</Button>);
   if (can('rate')) primary.push(<Button key="rate" variant={t.awaitingRating ? 'primary' : 'secondary'} icon="check" onClick={() => setDialog('rate')}>Rate task</Button>);
 
   return (
@@ -71,7 +71,7 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
       <header className="task-head">
         <div className="task-head-main">
           <div className="task-head-meta">
-            <span className="mono">{t.id}</span>
+            <span className="task-id">#{t.id}</span>
             <StatusBadge status={t.status} />
             {scheduleLabel({ status: t.status, startAt: t.startAt ? Date.parse(t.startAt) : null }, now()) && <Tag tone="info">Scheduled</Tag>}
             <PriorityBadge priority={t.priority} />
@@ -92,9 +92,20 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
             {t.awaitingRating && <Tag tone="warn">Awaiting rating{t.completedAt && withinRateWindow(t.completedAt) ? ' · rate within 3 working days' : ''}</Tag>}
           </div>
           <h1>{t.title}</h1>
-          <p className="muted">
-            Assigned to <strong>{name(t.assigneeId)}</strong> by <strong>{name(t.assignedBy)}</strong> · {t.status === 'completed' ? `completed ${relative(t.completedAt)}` : running || t.status === 'submitted' ? <LiveDue dueAt={t.dueAt} fallback={due} /> : formatShort(t.dueAt)}
-          </p>
+          <div className="task-head-people">
+            <span className="person-chip" title="Assignee">
+              <Avatar name={name(t.assigneeId)} size={22} />
+              <span><small>Assignee</small>{name(t.assigneeId)}</span>
+            </span>
+            <span className="person-chip" title="Task giver">
+              <Avatar name={name(t.assignedBy)} size={22} />
+              <span><small>Task giver</small>{name(t.assignedBy)}</span>
+            </span>
+            <span className={cx('due-chip', t.status === 'completed' ? 'is-done' : due.overdue && t.status !== 'cancelled' && 'is-late')}>
+              <Icon name={t.status === 'completed' ? 'circle-check' : 'clock'} size={14} />
+              {t.status === 'completed' ? `Completed ${relative(t.completedAt)}` : running || t.status === 'submitted' ? <LiveDue dueAt={t.dueAt} fallback={due} /> : `Due ${formatShort(t.dueAt)}`}
+            </span>
+          </div>
         </div>
         <div className="task-head-side">
           <div className="task-head-actions">
@@ -272,11 +283,22 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
                       {d.extensions.map((e) => (
                         <li key={e.id}>
                           <span className="muted">{formatDateTime(e.at)}</span>
-                          <span>
-                            {name(e.requestedBy)} asked to move {formatShort(e.currentDue)} → <strong>{formatShort(e.requestedDue)}</strong> · <Tag tone={e.status === 'approved' ? 'ok' : e.status === 'rejected' ? 'danger' : 'warn'}>{e.status}</Tag>
-                            <small className="muted"> {e.reason}</small>
-                            {e.decidedBy && <small className="muted"> · {e.status} by {name(e.decidedBy)}{e.decisionNote ? `: ${e.decisionNote}` : ''}</small>}
-                          </span>
+                          <div>
+                            <p>
+                              <strong>{name(e.requestedBy)}</strong> asked to move {formatShort(e.currentDue)} → <strong>{formatShort(e.requestedDue)}</strong>{' '}
+                              <Tag tone={e.status === 'approved' ? 'ok' : e.status === 'rejected' ? 'danger' : 'warn'}>{e.status === 'approved' ? 'Approved' : e.status === 'rejected' ? 'Rejected' : 'Pending'}</Tag>
+                            </p>
+                            {e.reason && <blockquote className="quote">{e.reason}</blockquote>}
+                            {e.decidedBy ? (
+                              <p className={cx('review-decision', e.status === 'approved' ? 'tone-ok' : 'tone-danger')}>
+                                <Icon name={e.status === 'approved' ? 'circle-check' : 'x'} size={14} /> {e.status === 'approved' ? 'Approved' : 'Rejected'} by {name(e.decidedBy)}
+                                {e.decidedAt && <> · {formatDateTime(e.decidedAt)}</>}
+                                {e.decisionNote && <span className="review-comment">“{e.decisionNote}”</span>}
+                              </p>
+                            ) : (
+                              <p className="muted">Awaiting decision.</p>
+                            )}
+                          </div>
                         </li>
                       ))}
                     </ol>

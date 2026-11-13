@@ -205,7 +205,7 @@ export function DeliveryLogPage() {
           { id: 'what', header: 'Template / subject', cell: (d) => (d.template ? <code className="code">{d.template}</code> : <span className="task-title"><span>{d.subject}</span>{d.kind === 'digest' && <span className="task-sub">Weekly digest · Managers & Founder's Office</span>}{(d.copied ?? (d.notificationId && getDb().notifications.find((x) => x.id === d.notificationId)?.title.startsWith('Copy:'))) && <span className="task-sub">Copied recipient</span>}</span>), sort: (d) => d.template ?? d.subject ?? '' },
           { id: 'task', header: 'Task', cell: (d) => (d.taskId ? <Link to={`/tasks/${d.taskId}`} className="mono">{d.taskId}</Link> : '—'), sort: (d) => d.taskId ?? '' },
           { id: 'level', header: 'Level', width: '70px', cell: (d) => (d.level === null ? '—' : <span className={cx('lvl', `lvl-${d.level}`)}>{LEVEL_SHORT[d.level]}</span>), sort: (d) => d.level ?? -1 },
-          { id: 'status', header: 'Status', cell: (d) => <span className="task-title"><StatusTag d={d} />{d.reason && <span className="task-sub">{d.reason}</span>}</span>, sort: (d) => d.status },
+          { id: 'status', header: 'Status', cell: (d) => <span className="task-title fit"><StatusTag d={d} />{d.reason && <span className="task-sub">{d.reason}</span>}</span>, sort: (d) => d.status },
           { id: 'preview', header: 'Preview', fixed: true, cell: (d) => <Button size="sm" variant="ghost" icon="eye" onClick={() => setPreview(d)} aria-label="Preview message" /> },
         ]}
       />

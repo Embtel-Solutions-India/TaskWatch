@@ -1800,7 +1800,12 @@ describe('System settings (T-3.7; SET-01)', () => {
       assert.deepEqual((await cos.put('/api/settings', valid())).body.priorityWeights, w, 'left out: unchanged');
       const board = (await (await as(U.leadA)).get(`/api/performance/leaderboard?teamId=${made[0].id}&period=month`)).body;
       assert.deepEqual(board.weights, w, `visible on the leaderboard: ${JSON.stringify(board).slice(0, 200)}`);
-      for (const r of board.rows) assert.equal(r.score, r.outcome, 'ranked on the Outcome Score only');
+      // D-173: ranked on 0.5·O + 0.3·Q + 0.2·T, a missing part left out and the rest re-weighted.
+      for (const r of board.rows) {
+        const parts = [[r.outcome, 0.5], [r.quality, 0.3], [r.timeliness, 0.2]].filter(([v]) => v !== null) as [number, number][];
+        const expected = r.outcome === null ? null : parts.reduce((a, [v, k]) => a + v * k, 0) / parts.reduce((a, [, k]) => a + k, 0);
+        assert.equal(r.score, expected, 'ranked on the Performance score');
+      }
     } finally {
       await pool.query(`update organizations set name = 'Vertical', settings = '{}' where id = 1`); // test data only
       await pool.query('update users set team_id = $2 where id = $1', [U.leadA, was[0].team_id]);
@@ -2824,19 +2829,28 @@ describe('Performance (PERF): measured tasks, ratings, scores, workload', () => 
     assert.equal((await lead.get(`/api/tasks/${reviewed}`)).body.time, null);
   });
 
-  it('PERF Task 4: approving a review needs a quality score (and an outcome score without a target)', async () => {
+  it('PERF Task 4 / D-173: approving a review needs an outcome score without a target; quality comes from returns', async () => {
     const lead = await as(U.leadA);
     const staff = await as(U.staffA1);
     const id = (await lead.post('/api/tasks', measured({ title: 'Draft the PERM brief', target: null, unit: '', reviewRequired: true }))).body.task.id;
     await staff.post(`/api/tasks/${id}/start`);
     assert.equal((await staff.post(`/api/tasks/${id}/submit`, { note: 'Brief ready for review' })).status, 200);
     assert.deepEqual((await lead.post(`/api/tasks/${id}/review`, { decision: 'approved' })).body.fields, {
-      qualityScore: 'Give a quality score from 0 to 100.',
       outcomeScore: 'Give an outcome score from 0 to 100.',
     });
-    const ok = await lead.post(`/api/tasks/${id}/review`, { decision: 'approved', qualityScore: 90, outcomeScore: 85 });
+    // One return for corrections, then approval without any quality number.
+    assert.equal((await lead.post(`/api/tasks/${id}/review`, { decision: 'changes_requested', comment: 'Add the missing sections' })).status, 200);
+    await staff.post(`/api/tasks/${id}/start`);
+    assert.equal((await staff.post(`/api/tasks/${id}/submit`, { note: 'Sections added, ready again' })).status, 200);
+    const ok = await lead.post(`/api/tasks/${id}/review`, { decision: 'approved', outcomeScore: 85 });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
-    assert.deepEqual([ok.body.task.status, ok.body.task.qualityScore, ok.body.task.outcomeScore], ['completed', 90, 85]);
+    assert.deepEqual([ok.body.task.status, ok.body.task.outcomeScore], ['completed', 85]);
+    const day = (d: number) => DateTime.now().setZone(IST).plus({ days: d }).toISODate();
+    const mine = await staff.get(`/api/performance/people/${U.staffA1}?period=custom&from=${day(-1)}&to=${day(60)}`);
+    assert.equal(mine.status, 200, JSON.stringify(mine.body));
+    const row = mine.body.tasks.find((t: { id: number }) => t.id === id);
+    assert.ok(row, 'the reviewed task is in the breakdown');
+    assert.deepEqual([row.reviewed, row.reworkCount, row.quality, row.timeliness], [true, 1, 60, 100], 'one return → quality 60; delivered early → timeliness 100');
   });
 
   it('PERF Task 4: the giver rates a finished task and decides on a shortfall; others may not', async () => {

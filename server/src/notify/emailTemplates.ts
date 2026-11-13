@@ -273,7 +273,10 @@ export function welcomeEmail(name: string, setPasswordLink?: string): string {
       ${paragraphs(
         setPasswordLink
           ? 'Choose your password with the button below (the link works for 7 days), then sign in. Every task you receive has a due date and an update rhythm — post updates and TaskWatch keeps everyone in the loop.'
-          : 'Sign in with your Google work account on the sign-in page. Every task you receive has a due date and an update rhythm — post updates and TaskWatch keeps everyone in the loop.',
+          : 'Two ways to sign in — open TaskWatch with the button below, then:\n\n' +
+            '• With Google: click “Sign in with Google” and choose your work account (this email address).\n' +
+            '• With a password: click “Forgot password?” under the sign-in form, enter this email address, and follow the link we send you to set one. Then sign in with your email and that password.\n\n' +
+            'Every task you receive has a due date and an update rhythm — post updates and TaskWatch keeps everyone in the loop.',
         `font-size:16px;line-height:1.55;color:${MUTED}`,
       )}
     </div>`,

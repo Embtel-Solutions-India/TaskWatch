@@ -2,6 +2,12 @@
 
 Each session appends its entry at the top. Write facts only, and link to documents instead of restating them.
 
+## 2026-11-13 (production live; D-173 performance score; UI polish)
+- Owner: production is live with env and DB. Treat production data as real.
+- D-173 built, uncommitted (CHANGELOG): Performance score 50/30/20 with returns-based Quality, graded Timeliness and the own-extension fairness rule. Pure tests 35/35; **`npm test` not run** (drops `taskwatch_test`; needs the owner's OK). Changed API tests: PERF Task 4 and the priority-weights board check.
+- UI polish from owner screenshots, uncommitted (CHANGELOG). Waiting on the owner: delete the replaced PNG originals and unused `login-illustration.jpg`? Keep error banners closable or fixed?
+- Next: owner runs `! npm test`; then commit only on request.
+
 ## 2026-11-13 (code-review fixes, D-171/D-172, release commit)
 - Done and committed on phases-8-10 with the owner's OK (CHANGELOG 2026-11-13): code-review fixes (GM reset keeps CoS fields, merged default policy saved, reassign due through doDueChange, reviewer reset, engine RuleSet once per run, history limit in SQL); D-171 absent L1 → L2; production builds always use the server; D-172 onboarding email (Staff page) with first-time set-password wording; Google sign-in button made prominent. Owner reported `npm test` green before the last two UI changes; e2e not run this session.
 - Production still needs: DB backup before migrations 017–019 run on first start; APP_URL, Brevo SMTP values, EMAIL_FROM_ADDRESS; GOOGLE_CLIENT_ID/SECRET/ALLOWED_DOMAINS and redirect URI `https://task.embtel.com/api/auth/google/callback`. Not merged to main.

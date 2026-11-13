@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { DAY, HOUR, PRIORITY_ORDER, STATUS_LABEL } from '../../constants';
 import type { Column } from '../../components/DataTable';
 import { Icon } from '../../components/icons';
-import { Avatar, Button, Input, LevelBadge, Menu, PriorityBadge, ProgressBar, Select, StatusBadge } from '../../components/ui';
+import { Avatar, Button, ConfirmDialog, Dialog, Field, Input, LevelBadge, Menu, PriorityBadge, ProgressBar, Select, StatusBadge } from '../../components/ui';
 import { useAction, useLocalState, useMe } from '../../hooks';
 import { taskStage } from '@taskwatch/shared/insights';
 import type { TaskView } from '../../services/api/base';
@@ -276,23 +276,43 @@ export interface SavedView {
 export function SavedViews({ scope, value, onApply }: { scope: string; value: TaskFilter; onApply: (f: TaskFilter) => void }) {
   const user = useMe();
   const [views, setViews] = useLocalState<SavedView[]>(`views.${user.id}.${scope}`, []);
+  // App dialogs instead of the browser's prompt()/confirm() boxes, so every question looks the same.
+  const [ask, setAsk] = useState<'name' | 'clear' | null>(null);
+  const [name, setName] = useState('');
+  const saveView = () => {
+    const n = name.trim();
+    if (!n) return;
+    setViews([...views.filter((v) => v.name !== n), { name: n, filter: value }]);
+    setAsk(null);
+  };
   return (
-    <Menu
-      label="Saved views"
-      icon="layers"
-      buttonLabel="Views"
-      items={[
-        ...views.map((v) => ({ label: v.name, icon: 'filter', onClick: () => onApply(v.filter) })),
-        {
-          label: 'Save current filters…',
-          icon: 'plus',
-          onClick: () => {
-            const name = window.prompt('Name this view');
-            if (name?.trim()) setViews([...views.filter((v) => v.name !== name.trim()), { name: name.trim(), filter: value }]);
-          },
-        },
-        views.length ? { label: 'Delete all saved views', icon: 'trash', danger: true, onClick: () => window.confirm('Delete all saved views for this list?') && setViews([]) } : null,
-      ]}
-    />
+    <>
+      <Menu
+        label="Saved views"
+        icon="layers"
+        buttonLabel="Views"
+        items={[
+          ...views.map((v) => ({ label: v.name, icon: 'filter', onClick: () => onApply(v.filter) })),
+          { label: 'Save current filters…', icon: 'plus', onClick: () => (setName(''), setAsk('name')) },
+          views.length ? { label: 'Delete all saved views', icon: 'trash', danger: true, onClick: () => setAsk('clear') } : null,
+        ]}
+      />
+      <Dialog
+        open={ask === 'name'}
+        onClose={() => setAsk(null)}
+        size="sm"
+        title="Save this view"
+        footer={<><Button variant="ghost" onClick={() => setAsk(null)}>Cancel</Button><Button variant="primary" type="submit" form="f-view" disabled={!name.trim()}>Save view</Button></>}
+      >
+        <form id="f-view" noValidate onSubmit={(e) => (e.preventDefault(), saveView())}>
+          <Field label="Name" htmlFor="view-name" hint="A view with the same name is replaced.">
+            <Input id="view-name" autoFocus value={name} maxLength={60} onChange={(e) => setName(e.target.value)} />
+          </Field>
+        </form>
+      </Dialog>
+      <ConfirmDialog open={ask === 'clear'} onClose={() => setAsk(null)} onConfirm={() => (setViews([]), setAsk(null))} title="Delete all saved views?" confirmLabel="Delete all" danger>
+        <p>Every saved view for this list is removed from this browser.</p>
+      </ConfirmDialog>
+    </>
   );
 }

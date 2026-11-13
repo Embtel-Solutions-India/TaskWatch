@@ -161,7 +161,7 @@ export async function sendOnboarding(actor: Actor, targetId: number): Promise<vo
   const target = await accountTarget(actor, targetId);
   if (!target.active) throw new HttpError(409, 'This person is deactivated. Reactivate them first.');
   if (signInMethod(target.email, target.google_domains, target.has_password) === 'google') {
-    await sendAccountEmail({ userId: target.id, address: target.email, event: 'welcome', subject: 'Welcome to TaskWatch', body: 'Welcome to TaskWatch. Sign in with your Google work account.', html: welcomeEmail(target.name) });
+    await sendAccountEmail({ userId: target.id, address: target.email, event: 'welcome', subject: 'Welcome to TaskWatch', body: 'Welcome to TaskWatch. Sign in with Google using this work email, or use "Forgot password?" on the sign-in page to set a password.', html: welcomeEmail(target.name) });
   } else {
     await issueToken(target, actor.id, { name: target.name });
   }

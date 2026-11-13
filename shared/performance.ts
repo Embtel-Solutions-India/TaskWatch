@@ -32,9 +32,51 @@ export interface ScoredTask {
   /** False for tasks created before the feature existed. */
   scored: boolean;
   priority: Priority;
+  /** D-173: rounds sent back to the assignee (changes requested or rejected). */
   reworkCount: number;
   /** Reviewed work: when the approved (or still pending) round was submitted. Review time never makes the assignee late. */
   submittedAt: Date | null;
+  /** D-173: the estimate that grades lateness; null = none (late scores 0). */
+  estimatedHours: number | null;
+  /** D-173: the deadline Timeliness measures against (see baselineDue); null = dueAt. */
+  baselineDueAt: Date | null;
+}
+
+/** D-173: P = 0.5·Outcome + 0.3·Quality + 0.2·Timeliness (owner's performance note, 2026-11-13). Fixed, not a setting. */
+export const SCORE_WEIGHTS = { outcome: 0.5, quality: 0.3, timeliness: 0.2 } as const;
+/** D-173: each return for corrections costs 40 quality points (accepted first time 100, once returned 60). */
+export const QUALITY_PER_RETURN = 40;
+
+/** D-173: 100 − 40 per return, minimum 0; null when the task went through no review (never assumed perfect). */
+export function taskQuality(t: Pick<ScoredTask, 'reviewed' | 'reworkCount'>): number | null {
+  return t.reviewed ? Math.max(0, 100 - QUALITY_PER_RETURN * t.reworkCount) : null;
+}
+
+/**
+ * D-173: 100 on or before the deadline; late = 100 − hours late ÷ estimated hours × 100, minimum 0 (2 h late on a 4 h
+ * estimate = 50). Without an estimate a late task scores 0. Measured against the baseline deadline (fairness rule).
+ */
+export function taskTimeliness(t: Pick<ScoredTask, 'dueAt' | 'completedAt' | 'submittedAt' | 'estimatedHours' | 'baselineDueAt'>, now: Date): number {
+  const due = (t.baselineDueAt ?? t.dueAt).getTime();
+  const done = (t.submittedAt ?? t.completedAt ?? now).getTime();
+  if (done <= due) return 100;
+  if (!t.estimatedHours || t.estimatedHours <= 0) return 0;
+  return Math.max(0, 100 - ((done - due) / 3_600_000 / t.estimatedHours) * 100);
+}
+
+/** One deadline change, in order. `own` = the assignee's own extension request, approved. */
+export interface DueChange {
+  dueAt: Date;
+  own: boolean;
+}
+/**
+ * D-173 fairness: the deadline before the assignee's own extensions. A change by the task giver (direct change, reassign,
+ * reopen, scope change) resets it without penalty; an approved extension the assignee asked for does not move it.
+ */
+export function baselineDue(original: Date, changes: DueChange[]): Date {
+  let base = original;
+  for (const c of changes) if (!c.own) base = c.dueAt;
+  return base;
 }
 
 const mean = (xs: number[]): number | null => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
@@ -99,8 +141,10 @@ export interface PersonScore {
 }
 
 /**
- * D-124: Outcome Score = Σ(task outcome × weight) ÷ Σ(weight) over counted tasks (an accepted shortfall is left out), and the
- * leaderboard score is that Outcome Score alone. Timeliness, quality and efficiency are computed for display only.
+ * Outcome = Σ(task outcome × weight) ÷ Σ(weight) over counted tasks (D-124 priority weights; an accepted shortfall is left
+ * out). D-173: Quality and Timeliness are averages of the per-task scores, and the leaderboard score is
+ * 0.5·O + 0.3·Q + 0.2·T. A missing part (e.g. no reviewed task) is left out and the rest re-weighted, so nobody is
+ * scored 0 or 100 for work that was never reviewed. Efficiency is display only.
  */
 export function personScore(tasks: ScoredTask[], from: Date, to: Date, now: Date, weights: PriorityWeights = EQUAL_WEIGHTS): PersonScore {
   const eligible = tasks.filter((t) => isEligible(t, from, to, now));
@@ -110,10 +154,13 @@ export function personScore(tasks: ScoredTask[], from: Date, to: Date, now: Date
   const weight = rated.reduce((a, r) => a + r.w, 0);
   const outcome = weight > 0 ? rated.reduce((a, r) => a + r.o * r.w, 0) / weight : null;
   const timely = counted.filter((t) => !t.reassignedAfterDue);
-  const timeliness = timely.length ? (timely.filter((t) => isOnTime(t, now)).length / timely.length) * 100 : null;
-  const quality = mean(eligible.filter((t) => t.reviewed && t.qualityScore !== null).map((t) => t.qualityScore!));
+  const timeliness = mean(timely.map((t) => taskTimeliness(t, now)));
+  const quality = mean(eligible.flatMap((t) => taskQuality(t) ?? []));
   const eff = (ts: ScoredTask[]) => mean(ts.map((t) => (isOnTime(t, now) ? (taskOutcome(t, now) ?? 0) : 0)));
-  const score = outcome;
+  const parts = ([[outcome, SCORE_WEIGHTS.outcome], [quality, SCORE_WEIGHTS.quality], [timeliness, SCORE_WEIGHTS.timeliness]] as const).filter(([v]) => v !== null);
+  const partWeight = parts.reduce((a, [, w]) => a + w, 0);
+  // Outcome is required: without it there is nothing delivered to score.
+  const score = outcome === null ? null : parts.reduce((a, [v, w]) => a + v! * w, 0) / partWeight;
   const flags: PersonScore['flags'] = [];
   if (eligible.length && quality === null) flags.push('no_quality_reviews');
   if (outcomes.some((o) => o === null)) flags.push('outcome_not_rated');

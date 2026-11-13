@@ -20,7 +20,7 @@ import {
 import { getDb } from "../../services/mock/store";
 import { sessionApi } from "../../services/api/session";
 import { BACKEND } from "../../services/http";
-import illustration from "../../assets/login-art.png";
+import illustration from "../../assets/login-art.webp";
 
 function AuthFrame({
   title,
@@ -41,7 +41,7 @@ function AuthFrame({
       <div className="auth-panel">
         {/* Owner's sign-in design (2026-11-11): the form sits in a deep-blue card on a plain white or black page. */}
         <div className="auth-card">
-          <img className="auth-logo" src="/icons/logo-on-dark.png" alt="TaskWatch" />
+          <img className="auth-logo" src="/icons/logo-on-dark.webp" alt="TaskWatch" />
           <h1>{title}</h1>
           {sub && <p className="muted">{sub}</p>}
           {children}

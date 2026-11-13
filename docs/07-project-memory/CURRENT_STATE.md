@@ -4,6 +4,7 @@ _Last updated: 2026-11-13 (session row: emails, logo, task form)_
 
 | Area | State |
 |---|---|
+| Session 2026-11-13 (late) | **Production live** (owner). D-173 Performance score (50/30/20) and UI polish: **built, uncommitted**, typecheck 0, pure tests 35/35, `npm test` not run (HANDOFF top entry). |
 | Session 2026-11-13 | Emails (branded templates, Brevo live), new logo, D-154 removals, D-155 task form, Policies durations, UI fixes: **built, uncommitted, typecheck 0, browser-checked; `npm test` + e2e not run since** (HANDOFF top entry). Release waits on the owner's OK for tests, then commit/merge/push. |
 | ADR-0015 (2026-11-13) | Attendance, vertical working time, GM-run verticals: **built and reviewed, uncommitted**. `npm test` 371/371, e2e 5/5. Open: owner sets GMs and working time on the dev server; deferred minors (ADR-0015 ledger). |
 | ADR-0014 (2026-11-12) | [ADR-0014](../03-architecture/decisions/ADR-0014.md) Accepted and **built, uncommitted** on `phases-8-10`: plan Tasks 1–13 done (deadline milestones, 10-min warning and countdown, start time, several assignees, vertical policies edited by the GM, apply to open tasks, reviewer deadline, Schedule page, e2e). Plan Task 14 done: D-152 delays entered on the dev database (global v2, not applied to open tasks; production needs the same entry), final-review fixes made (KI-58), full `npm test` 336/336, `npm run e2e` 4/4, typecheck 0 (2026-11-12). Open: browser checks (KI-59). Tracker: US-01…US-07 TESTING. |

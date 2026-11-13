@@ -38,6 +38,8 @@ export interface BreakdownTask {
   completedAt: string | null;
   outcome: number | null;
   onTime: boolean;
+  /** D-173: 0–100, graded by hours late against the estimate. */
+  timeliness: number;
   quality: number | null;
   reviewed: boolean;
   reworkCount: number;

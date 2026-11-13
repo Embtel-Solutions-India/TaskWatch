@@ -83,11 +83,11 @@ export function Shell({ children }: { children: ReactNode }) {
     <nav className={cx('sidebar', isCollapsed && 'collapsed', mobile && 'mobile', mobile && drawer && 'open')} aria-label="Main">
       <div className="brand">
         {isCollapsed ? (
-          <img className="brand-mark" src="/icons/mark.png" alt="TaskWatch" />
+          <img className="brand-mark" src="/icons/mark.webp" alt="TaskWatch" />
         ) : (
           <span className="brand-logo">
-            <img className="logo-light" src="/icons/logo.png" alt="TaskWatch" />
-            <img className="logo-dark" src="/icons/logo-on-dark.png" alt="" aria-hidden />
+            <img className="logo-light" src="/icons/logo.webp" alt="TaskWatch" />
+            <img className="logo-dark" src="/icons/logo-on-dark.webp" alt="" aria-hidden />
             {/* The signed-in person's vertical; the prototype has no verticals, so it shows the organization. */}
             <small>{BACKEND === 'server' ? bootstrap?.user.entityName ?? bootstrap?.settings.orgName : db.settings.orgName}</small>
           </span>
@@ -208,7 +208,7 @@ export function Shell({ children }: { children: ReactNode }) {
               )}
             </Popover>
           </header>
-          <DeadlineTimer />
+          <div className="deadline-float"><DeadlineTimer /></div>
           <main id="main" className="content" tabIndex={-1}>
             {children}
           </main>

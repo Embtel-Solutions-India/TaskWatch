@@ -1,7 +1,7 @@
 // Pure tests for the performance formulas (PERFORMANCE-FRD §5; owner's worked examples, 2026-11-06).
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { averageScore, isOnTime, isRatable, periodBounds, personScore, rankRows, shiftOf, taskOutcome, taskProgress, workingHours, workload, type ScoredTask } from '@taskwatch/shared/performance';
+import { averageScore, baselineDue, isOnTime, isRatable, periodBounds, personScore, rankRows, shiftOf, taskOutcome, taskProgress, taskQuality, taskTimeliness, workingHours, workload, type ScoredTask } from '@taskwatch/shared/performance';
 import { DEFAULT_STANDARD_TASKS, recommendedHours } from '@taskwatch/shared/standardTasks';
 
 const H = 3_600_000;
@@ -14,7 +14,8 @@ let seq = 0;
 const task = (o: Partial<ScoredTask> = {}): ScoredTask => ({
   id: ++seq, status: 'completed', dueAt: DUE, completedAt: new Date(DUE.getTime() - H),
   target: null, achieved: null, outcomeScore: 100, qualityScore: null, reviewed: false,
-  shortfallAccepted: null, reassignedAfterDue: false, scored: true, priority: 'normal', reworkCount: 0, submittedAt: null, ...o,
+  shortfallAccepted: null, reassignedAfterDue: false, scored: true, priority: 'normal', reworkCount: 0, submittedAt: null,
+  estimatedHours: null, baselineDueAt: null, ...o,
 });
 const near = (a: number | null, b: number) => assert.ok(a !== null && Math.abs(a - b) < 0.01, `${a} ≈ ${b}`);
 
@@ -30,9 +31,11 @@ describe('PERF outcome, timeliness, quality and score', () => {
     assert.equal(personScore(tasks, FROM, TO, NOW).timeliness, 80);
   });
 
-  it('owner example Q: 95, 90, 85 → 90; unreviewed tasks never count as 100', () => {
-    const s = personScore([task({ reviewed: true, qualityScore: 95 }), task({ reviewed: true, qualityScore: 90 }), task({ reviewed: true, qualityScore: 85 }), task()], FROM, TO, NOW);
-    assert.equal(s.quality, 90);
+  it('D-173 Q: 0, 1 and 2 returns → 100, 60, 20 → 60; unreviewed tasks never count as 100; the typed rating is ignored', () => {
+    const s = personScore([task({ reviewed: true, qualityScore: 10 }), task({ reviewed: true, reworkCount: 1 }), task({ reviewed: true, reworkCount: 2 }), task()], FROM, TO, NOW);
+    assert.equal(s.quality, 60);
+    assert.equal(taskQuality(task({ reviewed: true, reworkCount: 3 })), 0, 'three or more returns floor at 0');
+    assert.equal(taskQuality(task()), null);
   });
 
   it('no quality reviews: the person is flagged', () => {
@@ -83,15 +86,43 @@ describe('PERF outcome, timeliness, quality and score', () => {
   });
 });
 
-describe('D-124: the leaderboard ranks on the weighted Outcome Score only', () => {
-  const late = new Date(DUE.getTime() + 5 * H);
+describe('D-173: Performance score = 0.5·Outcome + 0.3·Quality + 0.2·Timeliness', () => {
+  // Owner's blog example: 4 h estimate, 5 PM deadline, returned once, accepted at 7 PM (submitted 7 PM).
+  const blog = (o: Partial<ScoredTask> = {}) =>
+    task({ outcomeScore: 100, reviewed: true, reworkCount: 1, estimatedHours: 4, submittedAt: new Date(DUE.getTime() + 2 * H), completedAt: new Date(DUE.getTime() + 2 * H), ...o });
 
-  it('score is the Outcome Score; late work and low quality do not move it (they stay for display)', () => {
-    const s = personScore([task({ target: 10, achieved: 10, completedAt: late, reviewed: true, qualityScore: 40 }), task({ target: 50, achieved: 40 }), task({ target: 5, achieved: 4 })], FROM, TO, NOW);
-    near(s.score, 86.667);
-    assert.equal(s.score, s.outcome);
-    near(s.timeliness, 66.667);
-    assert.equal(s.quality, 40);
+  it('owner blog example: O 100, Q 60, T 50 → 78', () => {
+    const s = personScore([blog()], FROM, TO, NOW);
+    assert.deepEqual([s.outcome, s.quality, s.timeliness], [100, 60, 50]);
+    near(s.score, 78);
+  });
+
+  it('timeliness: on time 100; late graded by the estimate, floor 0; late without an estimate 0', () => {
+    assert.equal(taskTimeliness(task(), NOW), 100);
+    assert.equal(taskTimeliness(blog(), NOW), 50);
+    assert.equal(taskTimeliness(blog({ estimatedHours: 1 }), NOW), 0);
+    assert.equal(taskTimeliness(blog({ estimatedHours: null }), NOW), 0);
+    assert.equal(taskTimeliness(task({ status: 'in_progress', completedAt: null, estimatedHours: 8, dueAt: new Date(NOW.getTime() - 2 * H) }), NOW), 75, 'open and past due: graded up to now');
+  });
+
+  it('fairness: the employee’s own extension still counts; the giver’s change resets the deadline', () => {
+    const five = new Date(DUE.getTime()), seven = new Date(DUE.getTime() + 2 * H), nine = new Date(DUE.getTime() + 4 * H);
+    assert.equal(baselineDue(five, [{ dueAt: seven, own: true }]).getTime(), five.getTime(), 'own extension: still measured from 5 PM');
+    assert.equal(baselineDue(five, [{ dueAt: seven, own: false }]).getTime(), seven.getTime(), 'giver scope change: new deadline, no penalty');
+    assert.equal(baselineDue(five, [{ dueAt: seven, own: true }, { dueAt: nine, own: false }]).getTime(), nine.getTime());
+    assert.equal(baselineDue(five, [{ dueAt: seven, own: false }, { dueAt: nine, own: true }]).getTime(), seven.getTime());
+    // Due moved to 7 PM by the employee's extension, delivered at 7 PM: on time for display, 50 for timeliness.
+    const t = blog({ dueAt: seven, baselineDueAt: five });
+    assert.equal(isOnTime(t, NOW), true);
+    assert.equal(taskTimeliness(t, NOW), 50);
+    assert.equal(taskTimeliness(blog({ dueAt: seven, baselineDueAt: seven }), NOW), 100, 'giver moved it: on time');
+  });
+
+  it('a part with no data is left out and the rest re-weighted; no outcome → no score', () => {
+    const s = personScore([blog({ reviewed: false })], FROM, TO, NOW);
+    assert.equal(s.quality, null);
+    near(s.score, (100 * 0.5 + 50 * 0.2) / 0.7);
+    assert.equal(personScore([task({ outcomeScore: null })], FROM, TO, NOW).score, null);
   });
 
   it('equal weights by default reproduce the owner example: (100 + 80 + 80) ÷ 3 = 86.67', () => {

@@ -164,7 +164,6 @@ export function CompleteDialog({ task, onClose }: Base) {
 export function ReviewDialog({ task, submission, onClose }: Base & { submission?: Review }) {
   const [decision, setDecision] = useState<'approved' | 'changes_requested' | 'rejected'>('approved');
   const [comment, setComment] = useState('');
-  const [quality, setQuality] = useState('');
   const [outcome, setOutcome] = useState('');
   const [accept, setAccept] = useState(false);
   const scores = BACKEND === 'server' && decision === 'approved';
@@ -176,7 +175,6 @@ export function ReviewDialog({ task, submission, onClose }: Base & { submission?
           a.run(task.id, {
             decision,
             comment,
-            ...(scores && quality !== '' ? { qualityScore: Number(quality) } : {}),
             ...(scores && task.target == null && outcome !== '' ? { outcomeScore: Number(outcome) } : {}),
             ...(scores && task.shortfallReason && accept ? { shortfallAccepted: true } : {}),
           }))
@@ -204,18 +202,12 @@ export function ReviewDialog({ task, submission, onClose }: Base & { submission?
             </label>
           ))}
         </fieldset>
-        {scores && (
-          <div className="grid-2">
-            <Field label="Quality score (0–100)" required htmlFor="r-q" error={a.fields.qualityScore}>
-              <Input id="r-q" type="number" min={0} max={100} step={1} value={quality} onChange={(e) => setQuality(e.target.value)} invalid={!!a.fields.qualityScore} />
-            </Field>
-            {task.target == null && (
-              <Field label="Outcome score (0–100)" required htmlFor="r-o" error={a.fields.outcomeScore}>
-                <Input id="r-o" type="number" min={0} max={100} step={1} value={outcome} onChange={(e) => setOutcome(e.target.value)} invalid={!!a.fields.outcomeScore} />
-              </Field>
-            )}
-          </div>
+        {scores && task.target == null && (
+          <Field label="Outcome score (0–100)" required htmlFor="r-o" hint="Did the work deliver the expected result? Quality is worked out from returns: accepted first time = 100, each return −40." error={a.fields.outcomeScore}>
+            <Input id="r-o" type="number" min={0} max={100} step={1} value={outcome} onChange={(e) => setOutcome(e.target.value)} invalid={!!a.fields.outcomeScore} />
+          </Field>
         )}
+        {BACKEND === 'server' && decision !== 'approved' && <p className="muted small">Sending it back lowers this task's quality score by 40 points.</p>}
         {scores && task.shortfallReason && (
           <Checkbox label={`Accept the reason given: “${task.shortfallReason}”`} hint="Not counted against the assignee." checked={accept} onChange={(e) => setAccept(e.target.checked)} />
         )}
@@ -366,7 +358,7 @@ export function CancelDialog({ task, onClose }: Base) {
   const [reason, setReason] = useState('');
   const a = useAction(cancelTask, { success: `${task.id} cancelled`, onSuccess: onClose });
   return (
-    <Dialog open onClose={onClose} size="sm" title={`Cancel ${task.id}?`} footer={<Foot onClose={onClose} label="Cancel task" danger pending={a.pending} form="f-cancel" />}>
+    <Dialog open onClose={onClose} size="sm" tone="danger" title={`Cancel ${task.id}?`} footer={<Foot onClose={onClose} label="Cancel task" danger pending={a.pending} form="f-cancel" />}>
       <form id="f-cancel" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id, reason))}>
         <p>Cancelled tasks are closed permanently and stop escalating. All history is kept.</p>
         <Field label="Reason" required htmlFor="cx-reason" error={a.fields.reason}>
@@ -381,7 +373,7 @@ export function CancelDialog({ task, onClose }: Base) {
 export function DiscardDialog({ task, onClose, onDone }: Base & { onDone?: () => void }) {
   const a = useAction(discardTask, { success: `Draft ${task.id} deleted`, onSuccess: () => (onClose(), onDone?.()) });
   return (
-    <Dialog open onClose={onClose} size="sm" title={`Delete draft ${task.id}?`} footer={<Foot onClose={onClose} label="Delete draft" danger pending={a.pending} form="f-discard" />}>
+    <Dialog open onClose={onClose} size="sm" tone="danger" title={`Delete draft ${task.id}?`} footer={<Foot onClose={onClose} label="Delete draft" danger pending={a.pending} form="f-discard" />}>
       <form id="f-discard" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id))}>
         <p>“{task.title}” was never assigned, so it disappears from every list for everyone. The audit trail keeps a record that it was deleted.</p>
       </form>
