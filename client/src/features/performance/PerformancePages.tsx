@@ -61,7 +61,7 @@ function useTeam(): { teams: { id: number; name: string }[]; teamId: number | nu
 
 function TeamSelect({ teams, teamId, onChange }: { teams: { id: number; name: string }[]; teamId: number | null; onChange: (id: number) => void }) {
   return (
-    <Select aria-label="Team" value={teamId ?? ''} onChange={(e) => onChange(Number(e.target.value))}>
+    <Select aria-label="Department" value={teamId ?? ''} onChange={(e) => onChange(Number(e.target.value))}>
       {teams.map((t) => (
         <option key={t.id} value={t.id}>
           {t.name}
@@ -88,13 +88,13 @@ export function LeaderboardPage() {
     <div className="page">
       <PageHeader
         title="Team performance"
-        description="Ranked on the Outcome Score of the tasks due in the period. People are compared only with their own team."
+        description="Ranked on the Outcome Score of the tasks due in the period. People are compared only with their own department."
         actions={teams.length > 1 ? <TeamSelect teams={teams} teamId={teamId} onChange={setTeamId} /> : undefined}
       />
       <PeriodPicker value={period} onChange={setPeriod} />
       {!teams.length ? (
         <Card>
-          <Empty icon="users" title="You are not in a team yet" />
+          <Empty icon="users" title="You are not in a department yet" />
         </Card>
       ) : !board ? (
         <Skeleton rows={5} />
@@ -111,8 +111,6 @@ export function LeaderboardPage() {
                   <th>Employee</th>
                   <th className="right">Outcome score</th>
                   <th className="right muted">Timeliness</th>
-                  <th className="right muted">Quality</th>
-                  <th className="right muted">Efficiency</th>
                 </tr>
               </thead>
               <tbody>
@@ -125,8 +123,6 @@ export function LeaderboardPage() {
                     </td>
                     <td data-label="Outcome score" className="right"><strong>{fmt(r.score)}</strong></td>
                     <td data-label="Timeliness" className="right muted">{fmt(r.timeliness)}</td>
-                    <td data-label="Quality" className="right muted">{fmt(r.quality)}</td>
-                    <td data-label="Efficiency" className="right muted">{fmt(r.efficiency)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -192,10 +188,10 @@ function BoardVisuals({ rows, analytics, teamId, onTeam, canOpen, periodQs }: { 
         )}
       </Card>
       {!!analytics?.teams.length && (
-        <Card title="Team comparison" sub="Average Outcome Score per team in the period. Choose a team to open its board.">
+        <Card title="Department comparison" sub="Average Outcome Score per department in the period. Choose a department to open its board.">
           {analytics.teams.some((t) => t.average !== null) && (
             <BarList
-              label="Average Outcome Score by team"
+              label="Average Outcome Score by department"
               data={analytics.teams.filter((t) => t.average !== null).map((t) => ({ label: t.name, value: t.average!, tone: t.id === teamId ? 'series-2' : 'series-1', hint: `${t.scored} of ${t.people} people scored` }))}
               format={(v) => v.toFixed(1)}
               max={100}
@@ -319,7 +315,7 @@ export function WorkloadPage() {
       />
       {!teams.length ? (
         <Card>
-          <Empty icon="users" title="You are not in a team yet" />
+          <Empty icon="users" title="You are not in a department yet" />
         </Card>
       ) : !d ? (
         <Skeleton rows={5} />

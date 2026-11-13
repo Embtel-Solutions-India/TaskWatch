@@ -1,6 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { LEVEL_LABEL, PRIORITY_LABEL } from '../../constants';
+import { HOUR, LEVEL_LABEL, PRIORITY_LABEL } from '../../constants';
+import { clockText } from '../shell/DeadlineTimer';
+import { scheduleLabel } from '@taskwatch/shared/schedule';
+import { isOnTime } from '@taskwatch/shared/performance';
 import { Icon, type IconName } from '../../components/icons';
 import { Avatar, Banner, Button, Card, Empty, ErrorState, FilePicker, KV, LevelBadge, Menu, PriorityBadge, ProgressBar, Skeleton, StatusBadge, TabPanel, Tabs, Textarea, ConfirmDialog, Tag } from '../../components/ui';
 import { useAction, useApi, useMe } from '../../hooks';
@@ -37,6 +40,7 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
   const publish = useAction(publishTask, { success: `${t.id} assigned` });
   const pendingExt = d.extensions.find((e) => e.status === 'pending');
   const lastReview = d.reviews.at(-1);
+  const approvedAt = d.reviews.findLast((r) => r.decision === 'approved')?.submittedAt;
   const activeEsc = d.escalations.filter((e) => e.status !== 'resolved').sort((a, b) => b.level - a.level);
   /** Server mode acknowledges one event: the highest one this viewer may acknowledge (D-26). */
   const ackEventId = activeEsc.find((e) => e.canAck)?.id;
@@ -69,16 +73,27 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
           <div className="task-head-meta">
             <span className="mono">{t.id}</span>
             <StatusBadge status={t.status} />
+            {scheduleLabel({ status: t.status, startAt: t.startAt ? Date.parse(t.startAt) : null }, now()) && <Tag tone="info">Scheduled</Tag>}
             <PriorityBadge priority={t.priority} />
-            <LevelBadge level={t.level} acked={t.escalationAcked} long />
+            {t.status === 'completed' ? (
+              // US-06 / ADR-0014 §on time: the scoring rule (approved submission, else completion, by the due time).
+              isOnTime({ dueAt: new Date(t.dueAt), completedAt: t.completedAt ? new Date(t.completedAt) : null, submittedAt: approvedAt ? new Date(approvedAt) : null }, new Date(now())) ? (
+                <Tag tone="ok">On time</Tag>
+              ) : (
+                <Tag tone="danger">Late</Tag>
+              )
+            ) : (
+              t.status !== 'cancelled' && <LevelBadge level={t.level} acked={t.escalationAcked} long />
+            )}
             {running && activeEsc[0] && <Tag tone={activeEsc[0].level >= 2 ? 'danger' : 'warn'}>{activeEsc[0].reason === 'overdue' ? 'Past due' : activeEsc[0].reason === 'blocked' ? 'Marked Blocked' : 'No assignee update'}</Tag>}
+            {t.assigneeAwayUntil && <Tag tone="warn">{t.assigneeAwayKind === 'leave' ? 'Assignee on leave' : t.assigneeAwayKind === 'absent' ? 'Assignee absent today' : `Assignee away until ${new Date(t.assigneeAwayUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}</Tag>}
             {t.recurrenceId && <Tag tone="info"><Icon name="repeat" size={11} /> Recurring</Tag>}
             {t.reviewRequired && <Tag>Review required</Tag>}
             {t.awaitingRating && <Tag tone="warn">Awaiting rating{t.completedAt && withinRateWindow(t.completedAt) ? ' · rate within 3 working days' : ''}</Tag>}
           </div>
           <h1>{t.title}</h1>
           <p className="muted">
-            Assigned to <strong>{name(t.assigneeId)}</strong> by <strong>{name(t.assignedBy)}</strong> · {t.status === 'completed' ? `completed ${relative(t.completedAt)}` : running || t.status === 'submitted' ? <span className={cx(due.overdue && 'tone-danger')}>{due.text}</span> : formatShort(t.dueAt)}
+            Assigned to <strong>{name(t.assigneeId)}</strong> by <strong>{name(t.assignedBy)}</strong> · {t.status === 'completed' ? `completed ${relative(t.completedAt)}` : running || t.status === 'submitted' ? <LiveDue dueAt={t.dueAt} fallback={due} /> : formatShort(t.dueAt)}
           </p>
         </div>
         <div className="task-head-side">
@@ -216,7 +231,7 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
                         <li key={r.id}>
                           <div className="review-round">Round {r.round}</div>
                           <div>
-                            <p><strong>{name(r.submittedBy)}</strong> submitted {formatDateTime(r.submittedAt)}</p>
+                            <p><strong>{name(r.submittedBy)}</strong> submitted {formatDateTime(r.submittedAt)} {Date.parse(r.submittedAt) <= Date.parse(t.dueAt) ? <Tag tone="ok">On time</Tag> : <Tag tone="danger">Late</Tag>}</p>
                             <blockquote className="quote">{r.note}</blockquote>
                             {r.decision ? (
                               <p className={cx('review-decision', r.decision === 'approved' ? 'tone-ok' : 'tone-warn')}>
@@ -284,15 +299,19 @@ function TaskWorkspace({ d }: { d: TaskDetail }) {
                 ['Assignee', <PersonRow key="a" user={d.users.find((u) => u.id === t.assigneeId)} />],
                 ['Task giver', <PersonRow key="g" user={d.users.find((u) => u.id === t.assignedBy)} />],
                 ['Reviewer', t.reviewRequired ? <PersonRow key="r" user={d.users.find((u) => u.id === t.reviewerId)} /> : <span className="muted">Not required</span>],
-                ['Team', t.team?.name ?? '—'],
+                ['Department', t.team?.name ?? '—'],
                 ['Priority', PRIORITY_LABEL[t.priority]],
                 ['Due', <span key="d" className={cx(due.overdue && running && 'tone-danger')}>{formatDateTime(t.dueAt)}</span>],
-                ['Start', t.startAt ? formatDateTime(t.startAt) : '—'],
+                ['Scheduled start', t.startAt ? formatDateTime(t.startAt) : '—'],
+                // ADR-0014: the fixed escalation times; progress never moves them.
+                ...(t.milestones
+                  ? ([['Escalates', <span key="ms" title={t.policyVersion ? `Policy ${t.policyVersion}` : undefined}>L1 {formatDateTime(t.milestones[0])} · L2 {formatDateTime(t.milestones[1])} · L3 {formatDateTime(t.milestones[2])}</span>]] as [string, ReactNode][])
+                  : []),
+                ...(t.submissionRequirements ? ([['Hand in', t.submissionRequirements]] as [string, ReactNode][]) : []),
                 ['Created', formatDateTime(t.createdAt)],
                 ['Last updated', formatDateTime(t.updatedAt)],
                 ['Acknowledged', t.acknowledgedAt ? <span key="ack"><Icon name="check" size={12} /> {formatDateTime(t.acknowledgedAt)}</span> : <span className="tone-warn">Not acknowledged</span>],
                 ['Progress', <span key="p" className="row-gap"><ProgressBar value={t.progress} /> {t.progress}%</span>],
-                ['Category', t.category],
                 ...(measuredFacts(t, d.time) as [string, ReactNode][]),
                 ...(d.recurrence ? ([['Recurrence', describeRecurrence(d.recurrence)]] as [string, ReactNode][]) : []),
                 ...(d.parent ? ([['Parent', <Link key="pa" to={`/tasks/${d.parent.id}`}>{d.parent.id}</Link>]] as [string, ReactNode][]) : []),
@@ -437,7 +456,7 @@ function EscalationTimeline({ d }: { d: TaskDetail }) {
                   <LevelBadge level={e.level} long acked={e.status === 'acknowledged'} />
                   <div>
                     <span>
-                      Reached {formatDateTime(e.at)} · {e.reason === 'overdue' ? 'past due' : e.reason === 'blocked' ? 'marked Blocked' : 'no update'} · to {e.recipientIds.map(name).join(', ')}{e.ccIds?.length ? `, cc ${e.ccIds.map(name).join(', ')}` : ''}
+                      Reached {formatDateTime(e.at)} · {e.reason === 'overdue' ? 'past due' : e.reason === 'blocked' ? 'marked Blocked' : 'no update'} · to {e.recipientIds.map(name).join(', ')}{e.ccIds?.length ? `, cc ${e.ccIds.map(name).join(', ')}` : ''}{e.accountable === 'reviewer' ? ' · waiting on the reviewer' : ''}
                     </span>
                     <small className="muted">
                       {e.status === 'active' && 'Active'}
@@ -617,4 +636,18 @@ function Comments({ d }: { d: TaskDetail }) {
       </ConfirmDialog>
     </div>
   );
+}
+
+/** ADR-0014: the due time as a live clock in the last hour (and once overdue, for an hour), else the usual label. */
+function LiveDue({ dueAt, fallback }: { dueAt: string; fallback: { text: string; overdue: boolean } }) {
+  const [t, setT] = useState(now());
+  const ms = Date.parse(dueAt) - t;
+  const live = Math.abs(ms) < HOUR;
+  useEffect(() => {
+    if (!live) return;
+    const id = setInterval(() => setT(now()), 1000);
+    return () => clearInterval(id);
+  }, [live]);
+  if (!live) return <span className={cx(fallback.overdue && 'tone-danger')}>{fallback.text}</span>;
+  return <span className={cx(ms <= 0 && 'tone-danger')}>{ms > 0 ? `due in ${clockText(ms)}` : `${clockText(ms)} overdue`}</span>;
 }

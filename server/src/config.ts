@@ -42,6 +42,10 @@ if (isProd && !env.SESSION_SECRET) {
   throw new Error('SESSION_SECRET must be set in production (load it from your secrets store).');
 }
 
+/** EMAIL_FROM_ADDRESS may be written "TaskWatch <x@y>"; only the address is used (the name is always "TaskWatch"). */
+const fromRaw = env.EMAIL_FROM_ADDRESS || env.SMTP_USER || '';
+const fromEmail = (fromRaw.match(/<([^>]+)>/)?.[1] ?? fromRaw).trim();
+
 export const config = {
   isProd,
   isTest,
@@ -74,8 +78,16 @@ export const config = {
     port: Number(env.SMTP_PORT ?? 465),
     user: env.SMTP_USER ?? '',
     pass: env.SMTP_PASS ?? '',
-    fromAddress: env.EMAIL_FROM_ADDRESS || env.SMTP_USER || '',
+    fromAddress: fromEmail,
     fromName: 'TaskWatch',
+  },
+
+  // ADR-0012 Web Push: on when both VAPID keys are set (`npx web-push generate-vapid-keys`); otherwise simulated.
+  push: {
+    enabled: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY),
+    publicKey: env.VAPID_PUBLIC_KEY ?? '',
+    privateKey: env.VAPID_PRIVATE_KEY ?? '',
+    subject: env.VAPID_SUBJECT || `mailto:${fromEmail || 'admin@localhost'}`,
   },
 
   devLogin: devLoginAllowed(env),

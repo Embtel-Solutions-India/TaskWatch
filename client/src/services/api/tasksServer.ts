@@ -38,6 +38,11 @@ export function toView(t: any): TaskView {
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     startAt: t.startAt,
+    milestones: t.milestones ?? null,
+    assigneeAwayUntil: t.assigneeAwayUntil ?? null,
+    assigneeAwayKind: t.assigneeAwayKind ?? null,
+    submissionRequirements: t.submissionRequirements ?? null,
+    policyVersion: t.policyVersion ?? null,
     dueAt: t.dueAt,
     clockStartedAt: t.clockStartedAt,
     acknowledgedAt: t.acknowledgedAt,
@@ -114,6 +119,7 @@ const escalationEvent = (taskId: string) => (e: any): EscalationEvent => ({
   taskId,
   level: e.level,
   reason: e.reason,
+  accountable: e.accountable ?? 'assignee',
   at: e.reachedAt ?? e.firedAt,
   cycle: e.cycleStartedAt ?? '',
   recipientIds: e.recipients.filter((r: any) => r.kind === 'to').map((r: any) => String(r.id)),
@@ -215,6 +221,9 @@ const taskBody = (i: TaskInput) => ({
   dueDate: i.dueDate,
   ...(i.dueTime ? { dueTime: i.dueTime } : {}),
   startDate: i.startDate || null,
+  ...(i.startDate && i.startTime ? { startTime: i.startTime } : {}),
+  submissionRequirements: i.submissionRequirements,
+  reviewerId: i.reviewRequired ? N(i.reviewerId) : null,
   reviewRequired: i.reviewRequired,
   parentId: N(i.parentId),
   target: i.target ? Number(i.target) : null,
@@ -241,6 +250,13 @@ export const tasksServer = {
   list: async (scope: TaskScope): Promise<TaskView[]> => (await http<{ items: any[] }>('GET', `/tasks?scope=${scope}`)).items.map(toView),
   get: async (id: string): Promise<TaskDetail> => detail(await http('GET', `/tasks/${id}`)),
   create: async (i: TaskInput): Promise<Task> => {
+    if (i.alsoAssigneeIds.length) {
+      // D-153: one task per person in one request; the first is returned, files go on each.
+      const { assigneeId, ...body } = taskBody(i);
+      const r = await http<{ tasks: any[] }>('POST', '/tasks', { ...body, assigneeIds: [assigneeId, ...i.alsoAssigneeIds.map(Number)], draft: i.draft });
+      if (i.files.length) for (const t of r.tasks) await post(`/tasks/${t.id}/attachments`, {}, i.files);
+      return toView(r.tasks[0]);
+    }
     const r = await http<{ task: any }>('POST', '/tasks', { ...taskBody(i), draft: i.draft });
     if (i.files.length) await post(`/tasks/${r.task.id}/attachments`, {}, i.files); // files go on after create (KI-31)
     return toView(r.task);
@@ -265,7 +281,8 @@ export const tasksServer = {
   requestExtension: async (id: string, i: { requestedDate: string; requestedTime: string; reason: string; info: string }) =>
     void (await http('POST', `/tasks/${id}/extensions`, { requestedDate: i.requestedDate, ...(i.requestedTime ? { requestedTime: i.requestedTime } : {}), reason: i.reason, info: i.info })),
   decideExtension: async (extId: string, i: { approve: boolean; note: string }) => void (await http('POST', `/extensions/${extId}/decision`, i)),
-  reassign: (id: string, i: { toId: string; reason: string }) => act(id, 'reassign', { toId: N(i.toId) ?? undefined, reason: i.reason }),
+  reassign: (id: string, i: { toId: string; reason: string; dueDate?: string; dueTime?: string }) =>
+    act(id, 'reassign', { toId: N(i.toId) ?? undefined, reason: i.reason, ...(i.dueDate ? { dueDate: i.dueDate, ...(i.dueTime ? { dueTime: i.dueTime } : {}) } : {}) }),
   cancel: (id: string, reason: string) => act(id, 'cancel', { reason }),
   discard: async (id: string): Promise<void> => void (await http('POST', `/tasks/${id}/discard`, {})), // D-133: 204
   reopen: (id: string, i: { reason: string; dueDate: string }) => act(id, 'reopen', i),
@@ -289,11 +306,17 @@ export const tasksServer = {
     })),
   /** POL-01/03: the default policy, entity overrides (D-48: windows and multiples) and the entities to choose from. */
   policies: async () => {
-    const [r, entities] = await Promise.all([http<{ defaults: any; overrides: Record<string, any> }>('GET', '/rules'), http<{ id: string; name: string }[]>('GET', '/entities')]);
-    return { defaults: r.defaults, overrides: r.overrides, entities };
+    const [r, entities] = await Promise.all([http<any>('GET', '/rules'), http<{ id: string; name: string }[]>('GET', '/entities')]);
+    return { defaults: r.defaults, overrides: r.overrides, stored: r.stored ?? {}, history: r.history ?? [], headOf: r.headOf ?? [], entities };
   },
-  setPolicy: async (scope: string, config: any): Promise<void> =>
-    void (await http('PUT', `/rules/${scope}`, { config: scope === 'default' ? config : { windowsHours: config.windowsHours, multiples: config.multiples } })),
+  /** ADR-0014: a vertical sends only the fields it changed (the page computes them with diffPolicy). */
+  setPolicy: async (scope: string, config: any): Promise<void> => void (await http('PUT', `/rules/${scope}`, { config })),
+  applyPolicy: async (scope: string): Promise<{ updated: number }> => http('POST', `/rules/${scope}/apply`, {}),
+  schedule: async (date: string, who: { team?: boolean; userId?: string }) => {
+    const q = who.team ? '&team=1' : who.userId ? `&userId=${who.userId}` : '';
+    const r = await http<any>('GET', `/schedule?date=${date}${q}`);
+    return { date: r.date, people: r.people.map((p: any) => ({ ...p, userId: String(p.userId), tasks: p.tasks.map((t: any) => ({ ...t, id: String(t.id) })) })) };
+  },
   resetPolicy: async (scope: string): Promise<void> => void (await http('DELETE', `/rules/${scope}`)),
   comment: async (id: string, i: { body: string; parentId: string | null; files: File[] }) => void (await post(`/tasks/${id}/comments`, { body: i.body, ...(i.parentId ? { parentId: i.parentId } : {}) }, i.files)),
   editComment: async (commentId: string, body: string) => void (await http('PUT', `/comments/${commentId}`, { body })),
@@ -320,7 +343,6 @@ export const tasksServer = {
       standardTasks: settings.standardTasks ?? [],
     };
   },
-  parentOptions: async () => (await http<any[]>('GET', '/tasks/options/parents')).map((t) => ({ id: String(t.id), title: t.title })),
   reviewQueue: async () => (await http<any[]>('GET', '/reviews')).map((x) => ({ task: toView(x.task), submission: review(x.submission) })),
   extensions: async () => (await http<any[]>('GET', '/extensions?status=all')).map((x) => ({ ext: extension(x.ext), task: toView(x.task), canDecide: x.canDecide })),
   /** AUD-02 / D-16: run the audit-chain integrity check now (throttled on the server to once per 5 minutes). */

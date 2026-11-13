@@ -6,6 +6,9 @@
   "type": "module",
   "exports": {
     "./levels": "./levels.ts",
+    "./policy": "./policy.ts",
+    "./worktime": "./worktime.ts",
+    "./schedule": "./schedule.ts",
     "./workflow": "./workflow.ts",
     "./permissions": "./permissions.ts",
     "./settings": "./settings.ts",

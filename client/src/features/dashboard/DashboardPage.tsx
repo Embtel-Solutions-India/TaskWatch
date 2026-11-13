@@ -247,16 +247,16 @@ function ManagerDash({ d, range }: { d: Of<'manager'>; range: Range }) {
       </div>
       <div className="dash-grid">
         <TrendCard data={d.trend} range={range} title="Completion trend" />
-        <Card title="Overdue by team" sub="Open tasks past due, per team">
-          <BarList label="Overdue by team" data={d.overdueByTeam.map((t) => ({ label: t.name, value: t.value, tone: 'tone-danger-bg' }))} />
+        <Card title="Overdue by department" sub="Open tasks past due, per department">
+          <BarList label="Overdue by department" data={d.overdueByTeam.map((t) => ({ label: t.name, value: t.value, tone: 'tone-danger-bg' }))} />
         </Card>
       </div>
       <div className="dash-grid three">
         <Card title="Escalations by priority" sub="Open tasks at each level">
           <ColumnChart categories={PRIORITIES.map((p) => PRIORITY_LABEL[p])} series={d.escalationsByPriority.map((r) => ({ name: `L${r.level}`, values: r.values, tone: `lvl-fill-${r.level}` }))} label="Escalations by priority" stacked height={170} />
         </Card>
-        <Card title={<>Update compliance <InfoTip text="Share of each team's active tasks whose assignee updated within the required window." /></>}>
-          <BarList label="Update compliance by team" data={d.complianceByTeam.map((c) => ({ label: c.name, value: c.value, tone: c.value >= 0.8 ? 'series-2' : c.value >= 0.6 ? 'tone-warn-bg' : 'tone-danger-bg' }))} format={(v) => `${Math.round(v * 100)}%`} max={1} />
+        <Card title={<>Update compliance <InfoTip text="Share of each department's active tasks whose assignee updated within the required window." /></>}>
+          <BarList label="Update compliance by department" data={d.complianceByTeam.map((c) => ({ label: c.name, value: c.value, tone: c.value >= 0.8 ? 'series-2' : c.value >= 0.6 ? 'tone-warn-bg' : 'tone-danger-bg' }))} format={(v) => `${Math.round(v * 100)}%`} max={1} />
         </Card>
         <Card title="Delayed reviews" sub="In review for over 24 h">
           <TaskMiniList tasks={d.delayedReviews.items} empty="No reviews waiting over 24 h." />
@@ -272,12 +272,12 @@ function ManagerDash({ d, range }: { d: Of<'manager'>; range: Range }) {
 
 function TeamComparison({ teams }: { teams: Of<'manager'>['teams'] }) {
   return (
-    <Card title={<>Team comparison <InfoTip text="Completion = completed ÷ non-cancelled tasks in scope (all time). Open/overdue/escalated are current counts. These are operational indicators, not a ranking of people." /></>}>
+    <Card title={<>Department comparison <InfoTip text="Completion = completed ÷ non-cancelled tasks in scope (all time). Open/overdue/escalated are current counts. These are operational indicators, not a ranking of people." /></>}>
       <table className="table compact">
-        <caption className="sr-only">Team comparison</caption>
+        <caption className="sr-only">Department comparison</caption>
         <thead>
           <tr>
-            <th>Team</th>
+            <th>Department</th>
             <th className="right">Open</th>
             <th className="right">Overdue</th>
             <th className="right">Escalated</th>
@@ -287,7 +287,7 @@ function TeamComparison({ teams }: { teams: Of<'manager'>['teams'] }) {
         <tbody>
           {teams.map((t) => (
             <tr key={t.id}>
-              <td data-label="Team"><Link to={`/tasks/team?team=${t.id}`}>{t.name}</Link></td>
+              <td data-label="Department"><Link to={`/tasks/team?team=${t.id}`}>{t.name}</Link></td>
               <td data-label="Open" className="right">{t.open}</td>
               <td data-label="Overdue" className="right">{t.overdue ? <span className="tone-danger">{t.overdue}</span> : 0}</td>
               <td data-label="Escalated" className="right">{t.escalated}</td>
@@ -354,9 +354,9 @@ function CosDash({ d, range }: { d: Of<'executive'>; range: Range }) {
         </Card>
       </div>
       <div className="dash-grid three">
-        <Card title={<>At-risk teams <InfoTip text="Teams ranked by (overdue + escalated) ÷ open tasks. A team appears only if it has at least one." /></>}>
+        <Card title={<>At-risk departments <InfoTip text="Departments ranked by (overdue + escalated) ÷ open tasks. A department appears only if it has at least one." /></>}>
           {d.atRiskTeams.length === 0 ? (
-            <p className="muted">No team has overdue or escalated work.</p>
+            <p className="muted">No department has overdue or escalated work.</p>
           ) : (
             <ul className="risk-list">
               {d.atRiskTeams.map((t) => (

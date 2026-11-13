@@ -1,7 +1,9 @@
+import { mentionedNames } from '@taskwatch/shared/notifications';
+import { overlaps as overlapsOf } from '@taskwatch/shared/schedule';
 import { DEFAULT_STANDARD_TASKS, type StandardTask } from '@taskwatch/shared/standardTasks';
 import { HOUR, LEVEL_LABEL, PRIORITY_LABEL, STATUS_LABEL } from '../../constants';
 import type { Attachment, Db, Priority, Task, User } from '../../types';
-import { ACTIVE_STATUSES, PRIORITIES } from '../../types';
+import { PRIORITIES } from '../../types';
 import { ApiError, assertCanViewTask, assertPerm, assignableUsers, canAssignTo, canViewTask, hasPerm, isOverseer, reportsOf } from '../authz/permissions';
 import { audit, createTaskRecord, iso, logActivity, ms, nextId, notify, processEscalations, recordAssignment, userName } from '../core';
 import { allowedActions, assertAction, assertTransition } from '../engine/workflow';
@@ -83,6 +85,14 @@ export interface TaskInput {
   dueDate: string;
   dueTime: string;
   startDate: string;
+  /** D-144: scheduled start time (HH:MM); used only with a start date. */
+  startTime: string;
+  /** ADR-0014: what the assignee must hand in. */
+  submissionRequirements: string;
+  /** Who reviews when review is required; '' = the giver. */
+  reviewerId: string;
+  /** D-153 (new tasks only): more people, one task each, with the same fields. */
+  alsoAssigneeIds: string[];
   reviewRequired: boolean;
   parentId: string;
   draft: boolean;
@@ -99,7 +109,6 @@ function validateTaskInput(db: Db, user: User, input: TaskInput, at: number, exi
   if (input.title.trim().length < 4) f.title = 'Give the task a title of at least 4 characters.';
   if (input.title.length > 140) f.title = 'Keep the title under 140 characters.';
   if (!PRIORITIES.includes(input.priority)) f.priority = 'Choose a priority.';
-  if (!input.category) f.category = 'Choose a category.';
   if (!input.assigneeId) f.assigneeId = 'Choose who will do this.';
   else if ((!existing || existing.assigneeId !== input.assigneeId) && !canAssignTo(db, user, input.assigneeId))
     f.assigneeId = 'You can only assign to people below you in the reporting line.';
@@ -107,7 +116,8 @@ function validateTaskInput(db: Db, user: User, input: TaskInput, at: number, exi
   const due = new Date(`${input.dueDate}T${input.dueTime || '17:00'}`).getTime();
   if (input.dueDate && Number.isNaN(due)) f.dueDate = 'Enter a valid date.';
   else if (input.dueDate && due <= at && (!existing || iso(due) !== existing.dueAt)) f.dueDate = 'The due time must be in the future.';
-  if (input.startDate && input.dueDate && input.startDate > input.dueDate) f.startDate = 'Start date must be on or before the due date.';
+  if (input.startDate && new Date(`${input.startDate}T${input.startTime || '00:00'}`).getTime() >= due) f.startDate = 'The scheduled start must be before the due time.';
+  if (input.reviewRequired && input.reviewerId && input.reviewerId === input.assigneeId) f.reviewerId = 'The assignee cannot review their own work.';
   if (input.parentId && !db.tasks.some((t) => t.id === input.parentId && canViewTask(db, user, t))) f.parentId = 'Pick a parent task you can see.';
   if (existing && input.parentId === existing.id) f.parentId = 'A task cannot be its own parent.';
   if (Object.keys(f).length) invalid(f);
@@ -136,6 +146,15 @@ export function createTask(input: TaskInput): Task | Promise<Task> {
   return mutate((db, user, at) => {
     assertPerm(db, user, 'create_tasks', 'create tasks');
     if (!input.draft) assertPerm(db, user, 'assign_tasks', 'assign tasks');
+    const everyone = [input.assigneeId, ...input.alsoAssigneeIds];
+    for (const a of everyone) validateTaskInput(db, user, { ...input, assigneeId: a }, now()); // D-153: all or none
+    const made = everyone.map((a) => createOne(db, user, at, { ...input, assigneeId: a }));
+    return made[0]!;
+  });
+}
+
+function createOne(db: Db, user: User, at: string, input: TaskInput): Task {
+  {
     const dueAt = validateTaskInput(db, user, input, now());
     const assignee = db.users.find((u) => u.id === input.assigneeId)!;
     const task = createTaskRecord(
@@ -149,7 +168,7 @@ export function createTask(input: TaskInput): Task | Promise<Task> {
         assigneeId: input.assigneeId,
         teamId: input.teamId || assignee.teamId,
         dueAt,
-        startAt: input.startDate ? iso(new Date(input.startDate + 'T09:00').getTime()) : null,
+        startAt: input.startDate ? iso(new Date(`${input.startDate}T${input.startTime || '09:00'}`).getTime()) : null,
         reviewRequired: input.reviewRequired,
         parentId: input.parentId || null,
         draft: input.draft,
@@ -159,9 +178,11 @@ export function createTask(input: TaskInput): Task | Promise<Task> {
       input.instructions.trim() ? `Instructions: ${input.instructions.trim()}` : '',
     );
     addFiles(db, task.id, input.files, user.id, at, 'task');
+    if (input.reviewRequired && input.reviewerId) task.reviewerId = input.reviewerId;
+    task.submissionRequirements = input.submissionRequirements.trim() || null;
     audit(db, { at, actorId: user.id, action: input.draft ? 'task.draft_created' : 'task.created', targetType: 'task', targetId: task.id, taskId: task.id, prev: null, next: `${task.title} → ${assignee.name}`, source: 'ui', context: `${PRIORITY_LABEL[task.priority]} · due ${dueAt.slice(0, 16).replace('T', ' ')}` });
     return task;
-  });
+  }
 }
 
 export function updateTask(id: string, input: TaskInput): void | Promise<void> {
@@ -402,7 +423,8 @@ export function decideExtension(extId: string, input: { approve: boolean; note: 
   });
 }
 
-export function reassignTask(id: string, input: { toId: string; reason: string }): void | Promise<void> {
+/** D-148: a new due time is required (server mode) when the task is past due or due within 10 minutes. */
+export function reassignTask(id: string, input: { toId: string; reason: string; dueDate?: string; dueTime?: string }): void | Promise<void> {
   if (BACKEND === 'server') return tasksServer.reassign(id, input);
   mutate((db, user, at) => {
     const task = findTask(db, id);
@@ -508,7 +530,8 @@ export function addComment(id: string, input: { body: string; parentId: string |
     addFiles(db, id, input.files, user.id, at, 'comment');
     // Comments are logged but never reset the silence clock.
     logActivity(db, id, 'comment', user.id, input.parentId ? 'Replied to a comment' : 'Commented', at);
-    const mentioned = db.users.filter((u) => input.body.includes(`@${u.name}`) && canViewTask(db, u, task) && u.id !== user.id);
+    const names = mentionedNames(input.body, db.users.map((u) => u.name));
+    const mentioned = db.users.filter((u) => names.has(u.name) && canViewTask(db, u, task) && u.id !== user.id);
     notify(db, mentioned.map((u) => u.id), 'mention', `${user.name} mentioned you on ${task.id}`, input.body.trim().slice(0, 140), id, at);
   });
 }
@@ -611,11 +634,6 @@ export function assigneeOptions(): (User & { entityId?: string; load?: { loadPer
   return read((db, user) => assignableUsers(db, user));
 }
 
-export function parentOptions(): { id: string; title: string }[] | Promise<{ id: string; title: string }[]> {
-  if (BACKEND === 'server') return tasksServer.parentOptions();
-  return read((db, user) => visibleTasks(db, user).filter((t) => ACTIVE_STATUSES.includes(t.status) || t.status === 'draft').map((t) => ({ id: t.id, title: t.title })));
-}
-
 /** What the task form looks up besides people: categories, the escalation rules shown as hints, and teams. */
 export interface TaskFormLookups {
   categories: string[];
@@ -630,4 +648,40 @@ export interface TaskFormLookups {
 export function taskFormLookups(): TaskFormLookups | Promise<TaskFormLookups> {
   if (BACKEND === 'server') return tasksServer.formLookups();
   return read((db) => ({ categories: db.settings.categories, rules: db.rules, teams: db.teams, entities: db.departments, standardTasks: db.settings.standardTasks ?? DEFAULT_STANDARD_TASKS }));
+}
+
+/** ADR-0014 / US-01, US-04: one day's scheduled work (the day is read in each person's zone). */
+export interface ScheduleDay {
+  date: string;
+  people: {
+    userId: string;
+    name: string;
+    timeZone: string;
+    tasks: { id: string; title: string; priority: Priority; status: Task['status']; startAt: string | null; dueAt: string; submittedAt: string | null; overlap: boolean }[];
+  }[];
+}
+
+export function getSchedule(date: string, who: { team?: boolean; userId?: string } = {}): ScheduleDay | Promise<ScheduleDay> {
+  if (BACKEND === 'server') return tasksServer.schedule(date, who);
+  return read((db, user) => {
+    // The prototype: the browser's zone, the same window rule as the server.
+    const ids = who.team ? [...reportsOf(db, user.id)] : [who.userId ?? user.id];
+    const from = new Date(`${date}T00:00`).getTime();
+    const to = from + 24 * HOUR;
+    return {
+      date,
+      people: ids.map((id) => {
+        const u = db.users.find((x) => x.id === id);
+        const mine = db.tasks.filter((t) => t.assigneeId === id && t.status !== 'draft' && t.status !== 'cancelled' && (t.startAt ? Date.parse(t.startAt) : Date.parse(t.dueAt) - HOUR) < to && Date.parse(t.dueAt) > from);
+        const clash = overlapsOf(mine.filter((t) => t.status !== 'completed').map((t) => ({ id: t.id, start: t.startAt ? Date.parse(t.startAt) : null, end: Date.parse(t.dueAt) })));
+        const sub = (taskId: string) => db.reviews.filter((r) => r.taskId === taskId).map((r) => r.submittedAt).sort().at(-1) ?? null;
+        return {
+          userId: id,
+          name: u?.name ?? id,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          tasks: mine.map((t) => ({ id: t.id, title: t.title, priority: t.priority, status: t.status, startAt: t.startAt, dueAt: t.dueAt, submittedAt: sub(t.id), overlap: clash.has(t.id) })),
+        };
+      }),
+    };
+  });
 }

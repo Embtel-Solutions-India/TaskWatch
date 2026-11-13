@@ -24,7 +24,7 @@ const REPORTS: Def[] = [
   { id: 'overdue', title: 'Overdue Tasks', question: 'What is late right now, and where?', icon: 'alert' },
   { id: 'escalations', title: 'Escalations', question: 'How often do tasks climb the ladder, and how far?', icon: 'zap' },
   { id: 'accountability', title: 'Staff Accountability', question: 'Is each person keeping their work updated and on time?', icon: 'user' },
-  { id: 'teams', title: 'Team Performance', question: 'How do teams compare on delivery and risk?', icon: 'users' },
+  { id: 'teams', title: 'Department Performance', question: 'How do departments compare on delivery and risk?', icon: 'users' },
   { id: 'assignments', title: 'Task Assignment', question: 'Who assigns work, and how is it distributed?', icon: 'send' },
   { id: 'compliance', title: 'Task Update Compliance', question: 'Are assignees posting updates within the required window?', icon: 'clock' },
   { id: 'reviews', title: 'Review Turnaround', question: 'How quickly are submissions reviewed?', icon: 'review' },
@@ -102,7 +102,7 @@ export function ReportPage() {
         <Field label="To" htmlFor="rf-to">
           <Input id="rf-to" type="date" value={f.to} onChange={(e) => set('to', e.target.value)} className="input-sm" />
         </Field>
-        <Field label="Team" htmlFor="rf-team">
+        <Field label="Department" htmlFor="rf-team">
           <Select id="rf-team" value={f.teamId} onChange={(e) => set('teamId', e.target.value)} className="input-sm">
             <option value="">All</option>
             {opts.data?.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -190,14 +190,14 @@ function ReportBody({ id, r }: { id: string; r: Report }) {
       return (
         <>
           <div className="grid-2">{trend}{status}</div>
-          <Card title="By team"><T head={['Team', 'Created', 'Completed', 'Completion', 'On-time']} rows={r.teamRows.map((t) => [t.name, t.assigned, t.completed, pct(t.completionRate), pct(t.onTimeRate)])} /></Card>
+          <Card title="By department"><T head={['Department', 'Created', 'Completed', 'Completion', 'On-time']} rows={r.teamRows.map((t) => [t.name, t.assigned, t.completed, pct(t.completionRate), pct(t.onTimeRate)])} /></Card>
         </>
       );
     case 'overdue':
       return (
         <>
           <div className="grid-2">
-            <Card title="Overdue by team" sub="Current"><BarList label="Overdue by team" data={r.overdueByTeam.map((t) => ({ label: t.key, value: t.value, tone: 'tone-danger-bg' }))} /></Card>
+            <Card title="Overdue by department" sub="Current"><BarList label="Overdue by department" data={r.overdueByTeam.map((t) => ({ label: t.key, value: t.value, tone: 'tone-danger-bg' }))} /></Card>
             {priority}
           </div>
           <Card title={`Overdue tasks (${r.overdue.length})`}><T head={['Task', 'Assignee', 'Priority', 'Due', 'Level']} rows={r.overdue.map((t) => [<Link key={t.id} to={`/tasks/${t.id}`}>{t.id} · {t.title}</Link>, t.assignee?.name, PRIORITY_LABEL[t.priority], formatShort(t.dueAt), t.level >= 0 ? `L${t.level}` : '—'])} empty="Nothing overdue." /></Card>
@@ -207,20 +207,20 @@ function ReportBody({ id, r }: { id: string; r: Report }) {
       return (
         <div className="grid-2">
           <Card title="Escalation events by level" sub="Triggered in range vs open now"><ColumnChart categories={r.escalationsByLevel.map((l) => LEVEL_LABEL[l.key]!)} series={[{ name: 'Triggered in range', values: r.escalationsByLevel.map((l) => l.value), tone: 'series-violet' }, { name: 'Open now', values: r.escalationsByLevel.map((l) => l.active), tone: 'series-danger' }]} label="Escalations by level" /></Card>
-          <Card title="Escalations by person"><T head={['Staff', 'Team', 'L1+ escalations', 'Open now', 'Overdue now']} rows={r.staffRows.filter((s) => s.escalations).sort((a, b) => b.escalations - a.escalations).map((s) => [s.name, s.team, s.escalations, s.openNow, s.overdueNow])} empty="No L1+ escalations in range." /></Card>
+          <Card title="Escalations by person"><T head={['Staff', 'Department', 'L1+ escalations', 'Open now', 'Overdue now']} rows={r.staffRows.filter((s) => s.escalations).sort((a, b) => b.escalations - a.escalations).map((s) => [s.name, s.team, s.escalations, s.openNow, s.overdueNow])} empty="No L1+ escalations in range." /></Card>
         </div>
       );
     case 'accountability':
       return (
         <Card title="Staff accountability" sub="Historical columns use the date range; 'now' columns are current. Not a performance score.">
-          <T head={['Staff', 'Team', 'Assigned', 'Completed', 'On-time', 'Update compliance', 'Open now', 'Overdue now', 'L1+ escalations']} rows={r.staffRows.map((s) => [s.name, s.team, s.assigned, s.completed, pct(s.onTimeRate), pct(s.compliance), s.openNow, s.overdueNow, s.escalations])} />
+          <T head={['Staff', 'Department', 'Assigned', 'Completed', 'On-time', 'Update compliance', 'Open now', 'Overdue now', 'L1+ escalations']} rows={r.staffRows.map((s) => [s.name, s.team, s.assigned, s.completed, pct(s.onTimeRate), pct(s.compliance), s.openNow, s.overdueNow, s.escalations])} />
         </Card>
       );
     case 'teams':
       return (
         <>
-          <Card title="Team comparison"><ColumnChart categories={r.teamRows.map((t) => t.name)} series={[{ name: 'Completed', values: r.teamRows.map((t) => t.completed), tone: 'series-2' }, { name: 'Open now', values: r.teamRows.map((t) => t.openNow), tone: 'series-1' }, { name: 'Overdue now', values: r.teamRows.map((t) => t.overdueNow), tone: 'series-danger' }]} label="Team comparison" /></Card>
-          <Card title="Team performance"><T head={['Team', 'Created', 'Completed', 'Completion', 'On-time', 'Open now', 'Overdue now', 'L1+ escalations']} rows={r.teamRows.map((t) => [t.name, t.assigned, t.completed, pct(t.completionRate), pct(t.onTimeRate), t.openNow, t.overdueNow, t.escalations])} /></Card>
+          <Card title="Department comparison"><ColumnChart categories={r.teamRows.map((t) => t.name)} series={[{ name: 'Completed', values: r.teamRows.map((t) => t.completed), tone: 'series-2' }, { name: 'Open now', values: r.teamRows.map((t) => t.openNow), tone: 'series-1' }, { name: 'Overdue now', values: r.teamRows.map((t) => t.overdueNow), tone: 'series-danger' }]} label="Department comparison" /></Card>
+          <Card title="Department performance"><T head={['Department', 'Created', 'Completed', 'Completion', 'On-time', 'Open now', 'Overdue now', 'L1+ escalations']} rows={r.teamRows.map((t) => [t.name, t.assigned, t.completed, pct(t.completionRate), pct(t.onTimeRate), t.openNow, t.overdueNow, t.escalations])} /></Card>
         </>
       );
     case 'assignments':

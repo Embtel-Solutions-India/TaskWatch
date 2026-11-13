@@ -5,12 +5,14 @@
 import { isCoS } from '@taskwatch/shared/permissions';
 import type { TaskAction } from '@taskwatch/shared/workflow';
 import { shiftOf, taskProgress, workingHours, type Purpose } from '@taskwatch/shared/performance';
+import { PRE_DEADLINE_WARNING_MINUTES, deadlineMilestones } from '@taskwatch/shared/policy';
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { DateTime } from 'luxon';
 import type pg from 'pg';
 import * as clock from '../clock.js';
+import { MINUTE } from '../clock.js';
 import { config } from '../config.js';
 import { HOUR } from '../clock.js';
 import { pool, tx, type Db } from '../db/pool.js';
@@ -25,6 +27,7 @@ import { appendLog } from './activity.js';
 import { appendAdmin } from './audit.js';
 import { assignableUsers, can, canView, relation, taskActions, taskPermissions } from './access.js';
 import { getDirectory, hasRole, type Directory, type DirUser } from './directory.js';
+import { awayNow, clockFor } from './worktime.js';
 import { getRuleSet } from './rules.js';
 import { findSensitiveId } from './sensitive.js';
 import { getSettings } from './settings.js';
@@ -99,9 +102,39 @@ export async function act(
     );
     const actions = taskActions(actor, dir, t, { pendingExtension: f[0]!.pending, mayAckEscalation: f[0]!.mine || (isCoS(actor) && f[0]!.any) });
     if (!actions.includes(action)) throw forbidden(`You can't ${label} on ${ref(taskId)} in its current state.`);
+    const was = { due: t.due_at.getTime(), priority: t.priority, assignee: t.assignee_id, entity: t.entity_id, status: t.status };
     await fn({ c, t, dir, now, rules, actions });
+    await restampIfMoved(c, taskId, was);
     await applyLevel(c, taskId, dir);
   });
+}
+
+/**
+ * ADR-0014 (D-140, D-146): fix the task's L2 and L3 instants from its due time, priority and its vertical's policy as it
+ * stands now. Progress never calls this, and a later policy change does not, so the milestones only move with the task.
+ */
+export async function stampMilestones(c: pg.PoolClient, taskId: number): Promise<void> {
+  const { rows } = await c.query<{ due_at: Date; priority: Priority; entity_id: string; organization_id: number; assignee_id: number | null }>(
+    'select due_at, priority, entity_id, organization_id, assignee_id from tasks where id = $1',
+    [taskId],
+  );
+  const t = rows[0];
+  if (!t) return;
+  const set = await getRuleSet(t.organization_id);
+  // ADR-0015 (D-160): non-Critical L2/L3 are working minutes after due in the assignee's vertical; away is not removed (late is late).
+  const assignee = t.assignee_id ? (await getDirectory(t.organization_id)).get(t.assignee_id) : undefined;
+  const [, l2, l3] = deadlineMilestones(t.due_at.getTime(), t.priority, set.for(t.entity_id), clockFor(assignee, t.priority));
+  await c.query('update tasks set deadline_l2_at = $2, deadline_l3_at = $3, policy_version = $4 where id = $1', [taskId, new Date(l2), new Date(l3), set.versionTag(t.entity_id)]);
+}
+
+/** Restamp after an action that moved what the milestones are made of: due time, priority, assignee, vertical, or leaving draft / Done. */
+async function restampIfMoved(c: pg.PoolClient, taskId: number, was: { due: number; priority: string; assignee: number; entity: string; status: string }): Promise<void> {
+  const { rows } = await c.query('select due_at, priority, assignee_id, entity_id, status, deadline_l2_at from tasks where id = $1', [taskId]);
+  const t = rows[0];
+  if (!t || t.status === 'draft') return;
+  const moved = t.due_at.getTime() !== was.due || t.priority !== was.priority || t.assignee_id !== was.assignee || t.entity_id !== was.entity;
+  const backInPlay = t.status !== was.status && (was.status === 'draft' || was.status === 'completed');
+  if (moved || backInPlay || !t.deadline_l2_at) await stampMilestones(c, taskId);
 }
 
 export async function notifyUser(c: pg.PoolClient, dir: Directory, rules: Ctx['rules'], userId: number | null | undefined, event: string, taskId: number, subject: string, text: string) {
@@ -121,6 +154,10 @@ export interface TaskInput {
   teamId: number | null;
   dueAt: Date;
   startAt: Date | null;
+  /** ADR-0014: what the assignee must hand in (free text, optional). */
+  submissionRequirements?: string | null;
+  /** Who reviews when review is required; null = the giver (as before). */
+  reviewerId?: number | null;
   reviewRequired: boolean;
   parentId: number | null;
   /** PERF (FRD §4): set by the task giver. Estimate and purpose are required except on drafts and system-generated tasks. */
@@ -146,7 +183,7 @@ async function checkTask(c: pg.PoolClient, actor: DirUser, dir: Directory, p: Ta
   if (title.length < 4) f.title = 'Give the task a title of at least 4 characters.';
   else if (title.length > 140) f.title = 'Keep the title under 140 characters.';
   const settings = await getSettings(actor.organizationId);
-  if (!p.category || !settings.categories.includes(p.category)) f.category = 'Choose a category.';
+  if (p.category && !settings.categories.includes(p.category)) f.category = 'Choose a category.'; // optional (owner 2026-11-13)
   const assignee = dir.get(p.assigneeId);
   const sameAssignee = opts.existing?.assignee_id === p.assigneeId;
   if (!assignee?.active && !sameAssignee) f.assigneeId = 'Choose who will do this.';
@@ -155,7 +192,12 @@ async function checkTask(c: pg.PoolClient, actor: DirUser, dir: Directory, p: Ta
   }
   const sameDue = opts.existing && opts.existing.due_at.getTime() === p.dueAt.getTime();
   if (!sameDue && p.dueAt.getTime() <= opts.now.getTime()) f.dueDate = 'The due time must be in the future.';
-  if (p.startAt && p.startAt.getTime() > p.dueAt.getTime()) f.startDate = 'Start date must be on or before the due date.';
+  if (p.startAt && p.startAt.getTime() >= p.dueAt.getTime()) f.startDate = 'The scheduled start must be before the due time.';
+  if (p.reviewRequired && p.reviewerId != null) {
+    const reviewer = dir.get(p.reviewerId);
+    if (p.reviewerId === p.assigneeId) f.reviewerId = 'The assignee cannot review their own work.';
+    else if (!reviewer?.active || !can(reviewer, dir, 'review_tasks')) f.reviewerId = 'Choose someone who can review tasks.';
+  }
   if (p.parentId !== null) {
     if (opts.existing && p.parentId === opts.existing.id) f.parentId = 'A task cannot be its own parent.';
     else {
@@ -179,24 +221,41 @@ export async function teamEntityOf(c: pg.PoolClient | pg.Pool, organizationId: n
   return rows[0]?.entity_id ?? null;
 }
 
+type CreateOpts = { draft?: boolean; recurringId?: number; occurrenceDate?: string };
+
 /** TASK-01/02: assign now, or save a draft (no assignment, no notification, no clock). Returns the new id. */
-export async function createTask(actor: DirUser, p: TaskInput, opts: { draft?: boolean; recurringId?: number; occurrenceDate?: string } = {}): Promise<number> {
+export async function createTask(actor: DirUser, p: TaskInput, opts: CreateOpts = {}): Promise<number> {
+  return (await createTasks(actor, [p], opts))[0]!;
+}
+
+/** D-153: the same task for several people, one task each, in one transaction: all are created or none. */
+export async function createTasks(actor: DirUser, inputs: TaskInput[], opts: CreateOpts = {}): Promise<number[]> {
   const dir = await getDirectory(actor.organizationId);
   const draft = !!opts.draft;
   if (!can(actor, dir, 'create_tasks')) throw forbidden("You don't have permission to create tasks.");
   if (!draft && !can(actor, dir, 'assign_tasks')) throw forbidden("You don't have permission to assign tasks.");
-  guardText(p.title, p.description, p.instructions);
-  const now = clock.now();
+  for (const p of inputs) guardText(p.title, p.description, p.instructions, p.submissionRequirements);
   return tx(async (c) => {
+    const ids: number[] = [];
+    for (const p of inputs) ids.push(await insertTask(c, actor, dir, p, opts));
+    return ids;
+  });
+}
+
+async function insertTask(c: pg.PoolClient, actor: DirUser, dir: Directory, p: TaskInput, opts: CreateOpts): Promise<number> {
+  const draft = !!opts.draft;
+  const now = clock.now();
+  {
     const entityId = await checkTask(c, actor, dir, p, { draft, now, system: opts.recurringId !== undefined });
     const assignee = dir.must(p.assigneeId);
     const { rows } = await c.query<{ id: number }>(
       `insert into tasks (title, description, instructions, category, entity_id, assignee_id, assigner_id, created_by, reviewer_id, priority,
          due_at, original_due_at, start_at, review_required, parent_id, team_id, created_at, assigned_at, clock_started_at, updated_at,
-         recurring_id, organization_id, status, occurrence_date, target, unit, estimated_hours, purpose)
-       values ($1,$2,$3,$4,$5,$6,$7,$7,$7,$8,$9,$9,$10,$11,$12,$13,$14,$14,$14,$14,$15,$16,$17,$18,$19,$20,$21,$22) returning id`,
+         recurring_id, organization_id, status, occurrence_date, target, unit, estimated_hours, purpose, submission_requirements)
+       values ($1,$2,$3,$4,$5,$6,$7,$7,coalesce($23::int, $7::int),$8,$9,$9,$10,$11,$12,$13,$14,$14,$14,$14,$15,$16,$17,$18,$19,$20,$21,$22,$24) returning id`,
       [p.title.trim(), p.description, p.instructions, p.category, entityId, p.assigneeId, actor.id, p.priority, p.dueAt, p.startAt, p.reviewRequired,
-        p.parentId, p.teamId ?? assignee.teamId, now, opts.recurringId ?? null, actor.organizationId, draft ? 'draft' : 'assigned', opts.occurrenceDate ?? null, p.target, p.target === null ? null : p.unit, p.estimatedHours, p.purpose],
+        p.parentId, p.teamId ?? assignee.teamId, now, opts.recurringId ?? null, actor.organizationId, draft ? 'draft' : 'assigned', opts.occurrenceDate ?? null, p.target, p.target === null ? null : p.unit, p.estimatedHours, p.purpose,
+        p.reviewerId ?? null, p.submissionRequirements ?? null],
     );
     const id = rows[0]!.id;
     await appendLog(c, {
@@ -206,9 +265,12 @@ export async function createTask(actor: DirUser, p: TaskInput, opts: { draft?: b
       body: opts.recurringId ? 'Created from a recurring schedule' : draft ? 'Saved as a draft' : null,
       after: { title: p.title.trim(), entity: entityId, assignee: who(assignee), priority: p.priority, dueAt: p.dueAt.toISOString(), instructions: p.instructions },
     });
-    if (!draft) await assignNow(c, id, actor, assignee, dir, now);
+    if (!draft) {
+      await stampMilestones(c, id);
+      await assignNow(c, id, actor, assignee, dir, now);
+    }
     return id;
-  });
+  }
 }
 
 /** The assignment record, the `assigned` log row and the mandatory assignment notification (TASK-01, TASK-02 publish). */
@@ -217,7 +279,7 @@ async function assignNow(c: pg.PoolClient, taskId: number, actor: DirUser, assig
   await appendLog(c, { taskId, actorId: actor.id, kind: 'assigned', after: { assignee: who(assignee) } });
   const { rows } = await c.query(`select t.*, e.name as entity_name from tasks t join entities e on e.id = t.entity_id where t.id = $1`, [taskId]);
   const rules = (await getRuleSet(actor.organizationId)).for(rows[0].entity_id);
-  await notify(c, dir, rules, [{ userId: assignee.id }], (u) => assignedMessage(taskInfo(rows[0]), actor, u));
+  await notify(c, dir, rules, [{ userId: assignee.id }], (u) => assignedMessage(taskInfo(rows[0]), actor, u, false, now));
 }
 
 /** TASK-02: a draft is assigned; the clock starts now. */
@@ -237,24 +299,29 @@ export async function publishTask(actor: DirUser, taskId: number): Promise<void>
  * due change follows FR-5's authority (BR-56), so Edit can bypass neither.
  */
 export async function updateTask(actor: DirUser, taskId: number, p: TaskInput): Promise<void> {
-  guardText(p.title, p.description, p.instructions);
+  guardText(p.title, p.description, p.instructions, p.submissionRequirements);
   await act(actor, taskId, 'edit', 'edit this task', async (x) => {
     const { c, t, dir, now, actions } = x;
     await checkTask(c, actor, dir, p, { draft: t.status === 'draft', existing: t, now });
     if (p.assigneeId !== t.assignee_id) {
       if (t.status !== 'draft' && !actions.includes('reassign')) throw forbidden(`You can't reassign on ${ref(taskId)} in its current state.`);
+      const due = t.status === 'draft' ? null : reassignDueError(t, now, p.dueAt.getTime() !== t.due_at.getTime() ? p.dueAt : undefined);
+      if (due) throw invalid({ dueDate: due });
       if (t.status !== 'draft') await doReassign(x, actor, p.assigneeId, 'Changed while editing the task');
     }
     if (t.status !== 'draft' && p.dueAt.getTime() !== t.due_at.getTime()) await doDueChange(x, actor, p.dueAt, 'Changed while editing the task');
     const fields = { title: p.title.trim(), description: p.description, instructions: p.instructions, category: p.category, priority: p.priority, team_id: p.teamId ?? t.team_id, start_at: p.startAt, review_required: p.reviewRequired, parent_id: p.parentId,
-      target: p.target, unit: p.target === null ? null : p.unit, estimated_hours: p.estimatedHours, purpose: p.purpose };
+      target: p.target, unit: p.target === null ? null : p.unit, estimated_hours: p.estimatedHours, purpose: p.purpose,
+      submission_requirements: p.submissionRequirements ?? null, reviewer_id: p.reviewRequired && p.reviewerId !== undefined ? p.reviewerId : t.reviewer_id }; // null: back to the giver
     const changed = Object.entries(fields).filter(([k, v]) => String(v ?? '') !== String(t[k] ?? ''));
     await c.query(
       `update tasks set title = $2, description = $3, instructions = $4, category = $5, priority = $6, team_id = $7, start_at = $8,
          review_required = $9, parent_id = $10, updated_at = $11, target = $14, unit = $15, estimated_hours = $16, purpose = $17,
+         submission_requirements = $18, reviewer_id = $19,
          assignee_id = case when status = 'draft' then $12 else assignee_id end, due_at = case when status = 'draft' then $13 else due_at end
        where id = $1`,
-      [taskId, fields.title, fields.description, fields.instructions, fields.category, fields.priority, fields.team_id, fields.start_at, fields.review_required, fields.parent_id, now, p.assigneeId, p.dueAt, fields.target, fields.unit, fields.estimated_hours, fields.purpose],
+      [taskId, fields.title, fields.description, fields.instructions, fields.category, fields.priority, fields.team_id, fields.start_at, fields.review_required, fields.parent_id, now, p.assigneeId, p.dueAt, fields.target, fields.unit, fields.estimated_hours, fields.purpose,
+        fields.submission_requirements, fields.reviewer_id],
     );
     if (changed.length) {
       await appendLog(c, {
@@ -270,19 +337,25 @@ export async function updateTask(actor: DirUser, taskId: number, p: TaskInput): 
 
 /* ---------- FR-5 direct due change (EXT-04) ---------- */
 
-/** FR-5 authority: CoS; a manager over the task; a lead over it once (lead_extension_used). Writes the log and notifies. */
-async function doDueChange(x: Pick<Ctx, 'c' | 't' | 'dir' | 'rules' | 'now'>, actor: DirUser, dueAt: Date, reason: string) {
+/**
+ * FR-5 authority: CoS; a manager over the task; a lead over it once (lead_extension_used). Writes the log and notifies.
+ * `earlierOk`: a reassignment may also set an earlier due time for the new person (D-148); only a later one is an
+ * extension, so only that uses up a lead's one extension.
+ */
+async function doDueChange(x: Pick<Ctx, 'c' | 't' | 'dir' | 'rules' | 'now'>, actor: DirUser, dueAt: Date, reason: string, earlierOk = false) {
   const { c, t, dir, rules, now } = x;
   if (!taskPermissions(actor, t, dir).extendDue) {
     throw forbidden(t.lead_extension_used && relation(actor, t, dir) === 'lead' ? 'A team lead can extend a task only once' : 'You cannot change this due date');
   }
-  if (dueAt.getTime() <= t.due_at.getTime()) throw invalid({ dueDate: 'The new due date must be later than the current one' });
+  const later = dueAt.getTime() > t.due_at.getTime();
+  if (!later && !earlierOk) throw invalid({ dueDate: 'The new due date must be later than the current one' });
   if (dueAt.getTime() <= now.getTime()) throw invalid({ dueDate: 'The new due date must be in the future.' });
   const rel = relation(actor, t, dir);
+  const usesExtension = rel === 'lead' && later;
   await appendLog(c, { taskId: t.id, actorId: actor.id, kind: 'due_change', body: reason, before: { dueAt: t.due_at.toISOString() }, after: { dueAt: dueAt.toISOString(), as: rel } });
-  await c.query('update tasks set due_at = $2, lead_extension_used = lead_extension_used or $3, updated_at = $4 where id = $1', [t.id, dueAt, rel === 'lead', now]);
+  await c.query('update tasks set due_at = $2, lead_extension_used = lead_extension_used or $3, updated_at = $4 where id = $1', [t.id, dueAt, usesExtension, now]);
   t.due_at = dueAt;
-  t.lead_extension_used = t.lead_extension_used || rel === 'lead';
+  t.lead_extension_used = t.lead_extension_used || usesExtension;
   await notify(c, dir, rules, [{ userId: t.assignee_id }], (u) =>
     inAppNotice('due_change', t.id, `New due date for “${t.title}”`, `${actor.name} moved the due date to ${formatInZone(dueAt, u.timeZone)}: ${reason}`),
   );
@@ -296,6 +369,7 @@ export async function changeDue(actor: DirUser, taskId: number, dueAt: Date, rea
     const t = await lockTask(c, taskId, actor, dir);
     const rules = (await getRuleSet(actor.organizationId)).for(t.entity_id);
     await doDueChange({ c, t, dir, rules, now: clock.now() }, actor, dueAt, reason.trim());
+    await stampMilestones(c, taskId);
     await applyLevel(c, taskId, dir);
   });
 }
@@ -406,7 +480,8 @@ export async function blockTask(actor: DirUser, taskId: number, reasonInput: str
     await c.query(`update tasks set status = 'blocked', blocked_reason = $2 where id = $1`, [taskId, reason]);
     await recordAssigneeUpdate(c, taskId, now);
     if (rules.blockedAlertsLead) {
-      const route = routeEscalation(dir, t.assignee_id, 1, rules);
+      // An L1 marked away now is passed over: the alert goes straight to L2.
+      const route = routeEscalation(dir, t.assignee_id, 1, rules, await awayNow(c, dir.ancestors(t.assignee_id), now));
       await notify(c, dir, rules, route.to.map((userId) => ({ userId })), () => blockedMessage(taskInfo(t), actor, reason));
     }
   });
@@ -606,6 +681,13 @@ export async function rateTask(actor: DirUser, taskId: number, input: { outcomeS
 
 /* ---------- Reassign, cancel, reopen (T-4.8; WF-07…09, D-29, D-30) ---------- */
 
+/** D-148: the new person is not escalated the moment they receive a task that is late (or about to be). `newDue`: only when it moves. */
+function reassignDueError(t: { due_at: Date }, now: Date, newDue: Date | undefined): string | null {
+  if (newDue && newDue.getTime() <= now.getTime()) return 'The due time must be in the future.';
+  const late = t.due_at.getTime() <= now.getTime() + PRE_DEADLINE_WARNING_MINUTES * MINUTE;
+  return late && !newDue ? 'This task is past due or due within 10 minutes: set a new due time for the new assignee.' : null;
+}
+
 /** BR-63/64: assignment record, the reassigner becomes the giver, acknowledgement cleared, clock restarts, escalations re-fire (D-30). */
 async function doReassign(x: Pick<Ctx, 'c' | 't' | 'dir' | 'rules' | 'now'>, actor: DirUser, toId: number, reason: string) {
   const { c, t, dir, rules, now } = x;
@@ -621,12 +703,12 @@ async function doReassign(x: Pick<Ctx, 'c' | 't' | 'dir' | 'rules' | 'now'>, act
   await c.query(`insert into assignments (task_id, assignee_id, assigned_by, assigned_at) values ($1,$2,$3,$4)`, [t.id, toId, actor.id, now]);
   await c.query('update escalations set cleared_at = $2 where task_id = $1 and cleared_at is null', [t.id, now]);
   await c.query('update tasks set level = -1, level_reason = null where id = $1', [t.id]);
-  await notify(c, dir, rules, [{ userId: toId }], (u) => assignedMessage(taskInfo(t), actor, u, true));
+  await notify(c, dir, rules, [{ userId: toId }], (u) => assignedMessage(taskInfo(t), actor, u, true, now));
   if (from && from.id !== actor.id) await notifyUser(c, dir, rules, from.id, 'reassigned', t.id, `“${t.title}” was reassigned`, `${actor.name} moved it to ${to.name}: ${reason}`);
   t.assignee_id = toId;
 }
 
-export async function reassignTask(actor: DirUser, taskId: number, input: { toId?: number; reason: string }): Promise<void> {
+export async function reassignTask(actor: DirUser, taskId: number, input: { toId?: number; reason: string; dueAt?: Date }): Promise<void> {
   const reason = input.reason.trim();
   guardText(reason);
   await act(actor, taskId, 'reassign', 'reassign this task', async (x) => {
@@ -635,7 +717,11 @@ export async function reassignTask(actor: DirUser, taskId: number, input: { toId
     else if (input.toId === x.t.assignee_id) f.toId = 'Choose someone other than the current assignee.';
     else if (!assignableUsers(actor, x.dir).some((u) => u.id === input.toId)) f.toId = 'That person is outside your assignment scope.';
     if (reason.length < 5) f.reason = 'Give a reason for the reassignment.';
+    const due = reassignDueError(x.t, x.now, input.dueAt);
+    if (due) f.dueDate = due;
     if (Object.keys(f).length) throw invalid(f);
+    // A new due time with the reassignment needs the same authority as any due change (FR-5 / BR-56), before the move.
+    if (input.dueAt && input.dueAt.getTime() !== x.t.due_at.getTime()) await doDueChange(x, actor, input.dueAt, `New due time with the reassignment: ${reason}`, true);
     await doReassign(x, actor, input.toId!, reason);
   });
 }

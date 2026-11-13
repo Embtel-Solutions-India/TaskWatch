@@ -4,7 +4,7 @@ import { PRIORITY_LABEL, ROLE_LABEL } from '../../constants';
 import { Button, Card, Checkbox, ConfirmDialog, Dialog, Empty, ErrorState, Field, Input, Menu, PageHeader, PriorityBadge, Select, Skeleton, Tag, Textarea } from '../../components/ui';
 import { useAction, useApi, useMe } from '../../hooks';
 import { deleteRecurrence, listRecurrences, saveRecurrence, toggleRecurrence, type RecurrenceInput, type RecurrenceRow } from '../../services/api/admin';
-import { assigneeOptions, taskFormLookups } from '../../services/api/tasks';
+import { assigneeOptions } from '../../services/api/tasks';
 import { describeRecurrence, isoDay } from '../../services/engine/recurrence';
 import { SCHEDULE_TITLE_MAX } from '@taskwatch/shared/recurrence';
 import { BACKEND } from '../../services/http';
@@ -64,7 +64,7 @@ export function RecurringPage() {
                     <td data-label="Schedule">
                       <span className="task-title">
                         <strong>{r.title}</strong>
-                        <span className="task-sub">Owner {r.ownerName} · {r.category}{r.reviewRequired ? ' · review required' : ''}</span>
+                        <span className="task-sub">Owner {r.ownerName}{r.reviewRequired ? ' · review required' : ''}</span>
                       </span>
                     </td>
                     <td data-label="Repeats">{r.summary}</td>
@@ -108,7 +108,6 @@ export function RecurringPage() {
 
 function RecurrenceDialog({ row, onClose }: { row: Row | null; onClose: () => void }) {
   const options = useApi(['task-assignees'], assigneeOptions).data ?? [];
-  const categories = useApi(['task-form-lookups'], taskFormLookups).data?.categories ?? [];
   const [f, setF] = useState<RecurrenceInput>(
     row
       ? { title: row.title, description: row.description, category: row.category, priority: row.priority, assigneeId: row.assigneeId, teamId: row.teamId, reviewRequired: row.reviewRequired, frequency: row.frequency, interval: row.interval, weekdays: row.weekdays, startDate: row.startDate, endDate: row.endDate, dueHour: row.dueHour, target: row.target ?? null, unit: row.unit ?? null, estimatedHours: row.estimatedHours ?? null, purpose: row.purpose ?? null }
@@ -158,14 +157,6 @@ function RecurrenceDialog({ row, onClose }: { row: Row | null; onClose: () => vo
                 <option key={p} value={p}>
                   {PRIORITY_LABEL[p]}
                 </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Category" required htmlFor="rc-cat" error={e.category}>
-            <Select id="rc-cat" value={f.category} onChange={(x) => set('category', x.target.value)} invalid={!!e.category}>
-              <option value="">Choose…</option>
-              {categories.map((c) => (
-                <option key={c}>{c}</option>
               ))}
             </Select>
           </Field>

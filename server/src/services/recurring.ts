@@ -111,7 +111,7 @@ export async function saveRecurring(actor: DirUser, id: number | null, p: Schedu
     const existing = id === null ? null : await lockOwned(c, actor, dir, id, 'edit');
     guardText(p.title, p.description);
     const f = { ...scheduleErrors(p), ...measuredErrors(p, true) };
-    if (!(await getSettings(actor.organizationId)).categories.includes(p.category)) f.category = 'Choose a category.';
+    if (p.category && !(await getSettings(actor.organizationId)).categories.includes(p.category)) f.category = 'Choose a category.'; // optional (owner 2026-11-13)
     const assignee = p.assigneeId === null ? undefined : dir.get(p.assigneeId);
     // An unchanged assignee is not re-checked: the owner may keep editing after the assignee moved (REC-02).
     if (!f.assigneeId && existing?.assignee_id !== p.assigneeId) {

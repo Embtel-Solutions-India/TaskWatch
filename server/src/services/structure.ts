@@ -5,10 +5,11 @@ import { reportsTo, seniorOf, type Role } from '@taskwatch/shared/permissions';
 import type pg from 'pg';
 import { z } from 'zod';
 import * as clock from '../clock.js';
-import { tx } from '../db/pool.js';
+import { pool, tx } from '../db/pool.js';
 import { HttpError, invalid, notFound } from '../http/errors.js';
 import { appendAdmin } from './audit.js';
-import { invalidateDirectory, type DirUser } from './directory.js';
+import { invalidateDirectory, type Directory, type DirUser } from './directory.js';
+import { can } from './access.js';
 
 type Row = { id: number; roles: Role[]; active: boolean; entity_id: string | null; team_id: number | null; manager_id: number | null };
 
@@ -61,7 +62,15 @@ export async function syncReportingLines(c: pg.PoolClient, org: number, actorId:
  * vertical they no longer head stop pointing at them; their former reports are re-placed by the caller's sync.
  */
 export async function vacatePosts(c: pg.PoolClient, personId: number, keep: { teamId: number | null; entityId: string | null }) {
-  await c.query('update teams set lead_id = null where lead_id = $1 and id is distinct from $2', [personId, keep.teamId]);
+  // D-137: a lead keeps every department they lead in `keep.entityId` while their home department (`keep.teamId`) is one of
+  // them and they still hold the Team Lead role; otherwise they leave them all.
+  await c.query(
+    `update teams t set lead_id = null where t.lead_id = $1 and not coalesce(
+       t.entity_id = $2::text
+       and exists (select 1 from teams h where h.id = $3::int and h.lead_id = $1 and h.archived_at is null)
+       and exists (select 1 from users u where u.id = $1 and 'lead' = any(u.roles)), false)`,
+    [personId, keep.entityId, keep.teamId],
+  );
   await c.query('update entities set head_id = null where head_id = $1 and id is distinct from $2', [personId, keep.entityId]);
 }
 
@@ -98,6 +107,40 @@ async function lockVertical(c: pg.PoolClient, org: number, id: string) {
   if (!rows[0]) throw notFound('Vertical not found.');
   if (rows[0].archived_at) throw new HttpError(409, 'This vertical is archived.');
   return rows[0];
+}
+
+/**
+ * D-137: `leadId` was just made lead of department `teamId` in vertical `entityId`. Someone who already leads a department
+ * in this vertical keeps their home department and runs one more; anyone else joins this one and leaves their old posts.
+ * Leading departments in two verticals is refused (escalations climb one line).
+ */
+async function placeLead(c: pg.PoolClient, leadId: number, teamId: number, entityId: string) {
+  const { rows: others } = await c.query<{ id: number; name: string; entity_id: string; entity: string }>(
+    `select t.id, t.name, t.entity_id, e.name as entity from teams t join entities e on e.id = t.entity_id
+      where t.lead_id = $1 and t.id <> $2 and t.archived_at is null order by t.name, t.id`,
+    [leadId, teamId],
+  );
+  const away = others.filter((t) => t.entity_id !== entityId);
+  if (away.length) {
+    throw invalid({ leadId: `They already lead ${away.map((t) => t.name).join(', ')} in ${away[0]!.entity}. A lead can run several departments only within one vertical.` });
+  }
+  const { rows } = await c.query<{ entity_id: string | null; team_id: number | null }>('select entity_id, team_id from users where id = $1', [leadId]);
+  if (rows[0]?.entity_id === entityId && others.some((t) => t.id === rows[0]!.team_id)) return; // keeps their home department
+  await c.query('update users set entity_id = $2, team_id = $3 where id = $1', [leadId, entityId, teamId]);
+  await vacatePosts(c, leadId, { teamId, entityId });
+}
+
+/**
+ * D-137: `personId` stops leading department `teamId` (another lead, or it is archived). If it was their home and they
+ * still lead another department, they move there; otherwise they stay a member, as before.
+ */
+async function leaveLeadPost(c: pg.PoolClient, personId: number, teamId: number) {
+  await c.query(
+    `update users u set team_id = (select t.id from teams t where t.lead_id = u.id and t.id <> $2 and t.archived_at is null order by t.name, t.id limit 1)
+      where u.id = $1 and u.team_id = $2
+        and exists (select 1 from teams t where t.lead_id = u.id and t.id <> $2 and t.archived_at is null)`,
+    [personId, teamId],
+  );
 }
 
 const done = async <T>(fn: (c: pg.PoolClient) => Promise<T>) => {
@@ -169,10 +212,7 @@ export function createDepartment(actor: DirUser, d: z.infer<typeof departmentSch
     if (clash.rowCount) throw invalid({ name: 'This vertical already has a department with this name.' });
     const { rows } = await c.query<{ id: number }>('insert into teams (name, entity_id, lead_id, organization_id) values ($1,$2,$3,$4) returning id', [d.name, d.entityId, d.leadId, org]);
     const id = rows[0]!.id;
-    if (d.leadId !== null) {
-      await c.query('update users set entity_id = $2, team_id = $3 where id = $1', [d.leadId, d.entityId, id]);
-      await vacatePosts(c, d.leadId, { teamId: id, entityId: d.entityId });
-    }
+    if (d.leadId !== null) await placeLead(c, d.leadId, id, d.entityId);
     await appendAdmin(c, { actorId: actor.id, kind: 'department.created', target: `team:${id}`, targetType: 'team', after: d });
     await syncReportingLines(c, org, actor.id, (p) => p.team_id === id || (d.leadId !== null && p.manager_id === d.leadId));
     return id;
@@ -194,9 +234,9 @@ export function updateDepartment(actor: DirUser, id: number, d: z.infer<typeof d
     const clash = await c.query('select 1 from teams where entity_id = $1 and lower(name) = lower($2) and id <> $3 and archived_at is null', [b.entity_id, d.name, id]);
     if (clash.rowCount) throw invalid({ name: 'This vertical already has a department with this name.' });
     await c.query('update teams set name = $2, lead_id = $3 where id = $1', [id, d.name, d.leadId]);
-    if (d.leadId !== null && d.leadId !== b.lead_id) {
-      await c.query('update users set entity_id = $2, team_id = $3 where id = $1', [d.leadId, b.entity_id, id]);
-      await vacatePosts(c, d.leadId, { teamId: id, entityId: b.entity_id });
+    if (d.leadId !== b.lead_id) {
+      if (b.lead_id !== null) await leaveLeadPost(c, b.lead_id, id);
+      if (d.leadId !== null) await placeLead(c, d.leadId, id, b.entity_id);
     }
     await appendAdmin(c, { actorId: actor.id, kind: 'department.updated', target: `team:${id}`, targetType: 'team', before: { name: b.name, leadId: b.lead_id }, after: d });
     await syncReportingLines(c, org, actor.id, (p) => p.team_id === id || p.id === b.lead_id || (d.leadId !== null && p.manager_id === d.leadId));
@@ -207,11 +247,76 @@ export function updateDepartment(actor: DirUser, id: number, d: z.infer<typeof d
 export function archiveDepartment(actor: DirUser, id: number) {
   const org = actor.organizationId;
   return done(async (c) => {
-    await lockDepartment(c, org, id);
+    const b = await lockDepartment(c, org, id);
+    // D-137: a lead whose home this is but who runs other departments moves to one of them instead of blocking the archive.
+    if (b.lead_id !== null) await leaveLeadPost(c, b.lead_id, id);
     const { rows } = await c.query<{ n: number }>('select count(*)::int as n from users where team_id = $1 and active', [id]);
     if (rows[0]!.n > 0) throw new HttpError(409, `Move or deactivate the ${rows[0]!.n} active people in this department first.`);
     // Review fix #6: the (entity, name) index covers archived rows, so the archived one gives its name back.
     await c.query("update teams set archived_at = $2, name = name || ' (archived #' || id || ')' where id = $1", [id, clock.now()]);
     await appendAdmin(c, { actorId: actor.id, kind: 'department.archived', target: `team:${id}`, targetType: 'team' });
   });
+}
+
+/* ---------- ADR-0015: a GM runs their own vertical (D-162) and its working time (D-159) ---------- */
+
+/** D-141: the verticals this person heads (their general manager). */
+export async function headOf(userId: number, organizationId: number): Promise<string[]> {
+  const { rows } = await pool.query<{ id: string }>('select id from entities where head_id = $1 and organization_id = $2 and archived_at is null order by id', [userId, organizationId]);
+  return rows.map((r) => r.id);
+}
+
+/** D-162: holders of manage_staff manage every vertical; a general manager only their own. */
+export async function canManageVertical(actor: DirUser, dir: Directory, entityId: string): Promise<boolean> {
+  return can(actor, dir, 'manage_staff') || (await headOf(actor.id, actor.organizationId)).includes(entityId);
+}
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const hhmm = () => z.string({ error: 'Enter a time as HH:MM.' }).regex(HHMM, { error: 'Enter a time as HH:MM.' });
+const validZone = (z0: string) => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: z0 });
+    return true;
+  } catch {
+    return false;
+  }
+};
+/** Null = the organization's default (D-159). */
+export const worktimeSchema = z
+  .object({
+    timeZone: z.string().refine(validZone, { error: 'Choose a valid time zone.' }).nullable(),
+    quietHours: z.object({ enabled: z.boolean(), start: hhmm(), end: hhmm() }).strict().nullable(),
+    workDays: z
+      .array(z.number().int().min(0).max(6))
+      .min(1, { error: 'Choose at least one working day.' })
+      .refine((d) => new Set(d).size === d.length, { error: 'Each day once.' })
+      .nullable(),
+    workStart: hhmm().nullable(),
+    workEnd: z.string().regex(/^(([01]\d|2[0-3]):[0-5]\d|24:00)$/, { error: 'Enter a time as HH:MM.' }).nullable(),
+  })
+  .strict();
+export type Worktime = z.infer<typeof worktimeSchema>;
+
+/** What a vertical stores, as the API returns it. */
+export function worktimeOf(e: Record<string, any>): Worktime {
+  return {
+    timeZone: e.time_zone ?? null,
+    quietHours: e.quiet_enabled === null || e.quiet_enabled === undefined ? null : { enabled: e.quiet_enabled, start: e.quiet_start, end: e.quiet_end },
+    workDays: e.work_days ?? null,
+    workStart: e.work_start ?? null,
+    workEnd: e.work_end ?? null,
+  };
+}
+
+/** D-159: set a vertical's working time; members follow at once. Open tasks keep their milestones until applied (D-165). */
+export async function updateWorktime(actor: DirUser, id: string, w: Worktime): Promise<void> {
+  await tx(async (c) => {
+    const b = await lockVertical(c, actor.organizationId, id);
+    await c.query(
+      `update entities set time_zone = $2, quiet_enabled = $3, quiet_start = $4, quiet_end = $5, work_days = $6, work_start = $7, work_end = $8 where id = $1`,
+      [id, w.timeZone, w.quietHours?.enabled ?? null, w.quietHours?.start ?? null, w.quietHours?.end ?? null, w.workDays, w.workStart, w.workEnd],
+    );
+    await appendAdmin(c, { actorId: actor.id, kind: 'vertical.worktime_changed', target: `vertical:${id}`, targetType: 'settings', before: worktimeOf(b), after: w });
+  });
+  invalidateDirectory();
 }

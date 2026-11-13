@@ -1,5 +1,8 @@
+import dns from 'node:dns/promises';
+import { fileURLToPath } from 'node:url';
 import nodemailer, { type Transporter } from 'nodemailer';
 import { config } from '../config.js';
+import { emailHtml } from './emailTemplates.js';
 
 export interface OutgoingMessage {
   address: string;
@@ -55,37 +58,30 @@ export async function sendWhatsApp(msg: OutgoingMessage): Promise<SendResult> {
 
 let transport: Transporter | null = null;
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-}
-
-export function emailHtml(body: string, link: string | null, linkLabel = 'Open in TaskWatch'): string {
-  const paragraphs = escapeHtml(body)
-    .split(/\n{2,}/)
-    .map((p) => `<p style="margin:0 0 12px">${p.replace(/\n/g, '<br>')}</p>`)
-    .join('');
-  const button = link
-    ? `<p style="margin:20px 0 0"><a href="${escapeHtml(link)}" style="background:#1f4f8f;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600">${escapeHtml(linkLabel)}</a></p>`
-    : '';
-  return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:#1d2433;max-width:560px">${paragraphs}${button}<p style="margin:24px 0 0;color:#6b7280;font-size:12px">Sent by TaskWatch</p></div>`;
-}
-
-/** Email through the Google Workspace domain, sender name "TaskWatch". */
+/** Email over SMTP (Brevo relay), sender name "TaskWatch". Without `html`, the body goes in the plain branded shell. */
 export async function sendEmail(msg: OutgoingMessage, html?: string): Promise<SendResult> {
   if (!config.smtp.enabled) return { simulated: true, providerId: null };
+  // Nodemailer resolves hosts with dns.resolve (queries the DNS server directly), which times out on networks where only
+  // the OS resolver works. Resolve with dns.lookup (OS resolver) instead; TLS still verifies the real hostname.
+  // ponytail: IP fixed for the process lifetime; re-resolve per send if the relay's address ever rotates mid-run.
   transport ??= nodemailer.createTransport({
-    host: config.smtp.host,
+    host: (await dns.lookup(config.smtp.host)).address,
     port: config.smtp.port,
     secure: config.smtp.port === 465,
     auth: { user: config.smtp.user, pass: config.smtp.pass },
+    tls: { servername: config.smtp.host },
   });
   const text = msg.link ? `${msg.body}\n\n${msg.link}` : msg.body;
+  const body = html ?? emailHtml(msg.body, msg.link, 'Open TaskWatch', msg.subject ?? '');
+  // Illustrations travel inside the email (cid:), so they show without the app being publicly reachable.
+  const arts = [...new Set([...body.matchAll(/cid:tw-art-(\w+)/g)].map((m) => m[1]!))];
   const info = await transport.sendMail({
     from: { name: config.smtp.fromName, address: config.smtp.fromAddress },
     to: msg.address,
     subject: msg.subject ?? 'TaskWatch',
     text,
-    html: html ?? emailHtml(msg.body, msg.link),
+    html: body,
+    attachments: arts.map((a) => ({ filename: `${a}.png`, path: fileURLToPath(new URL(`./art/${a}.png`, import.meta.url)), cid: `tw-art-${a}` })),
   });
   return { simulated: false, providerId: info.messageId ?? null };
 }

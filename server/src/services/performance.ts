@@ -15,6 +15,7 @@ import {
 } from '@taskwatch/shared/performance';
 import { LADDER_STATUSES, type Status } from '@taskwatch/shared/workflow';
 import { zonedInstant } from '@taskwatch/shared/levels';
+import { labelDepartments } from '@taskwatch/shared/permissions';
 import * as clock from '../clock.js';
 import { pool } from '../db/pool.js';
 import { invalid, notFound } from '../http/errors.js';
@@ -58,11 +59,11 @@ export function visibleTeamIds(viewer: DirUser, dir: Directory): Set<number> | '
 /** GET /api/performance/teams: the boards the viewer may open, for the team picker. */
 export async function visibleTeams(viewer: DirUser, dir: Directory) {
   const visible = visibleTeamIds(viewer, dir);
-  const { rows } = await pool.query<{ id: number; name: string }>(
-    'select id, name from teams where organization_id = $1 and archived_at is null order by name',
+  const { rows } = await pool.query<{ id: number; name: string; entity_id: string }>(
+    'select id, name, entity_id from teams where organization_id = $1 and archived_at is null order by name',
     [viewer.organizationId],
   );
-  return rows.filter((t) => visible === 'all' || visible.has(t.id));
+  return labelDepartments(rows.filter((t) => visible === 'all' || visible.has(t.id)), (t) => t.entity_id).map((t) => ({ id: t.id, name: t.name }));
 }
 
 async function loadTeam(viewer: DirUser, dir: Directory, teamId: number) {

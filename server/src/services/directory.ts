@@ -2,6 +2,8 @@ import { DEFAULT_ROLE_PERMISSIONS, type Org, type Permission } from '@taskwatch/
 import type { Db } from '../db/pool.js';
 import { pool } from '../db/pool.js';
 import type { Role } from '../domain.js';
+import { DEFAULT_SETTINGS } from '@taskwatch/shared/settings';
+import { scheduleOf, type Schedule } from '@taskwatch/shared/worktime';
 import { getRoleMatrix } from './permissions.js';
 
 export interface DirUser {
@@ -23,6 +25,8 @@ export interface DirUser {
   active: boolean;
   teamId: number | null;
   organizationId: number;
+  /** ADR-0015 (D-159): the vertical's working days and hours in its zone. */
+  work: Schedule;
 }
 
 /** In-memory view of one organization's people, reporting lines and role matrix (`org`, for the shared rules). */
@@ -103,6 +107,7 @@ export function isFounderOffice(u: Pick<DirUser, 'roles'>): boolean {
 }
 
 export function toDirUser(r: Record<string, any>): DirUser {
+  const timeZone: string = r.v_time_zone ?? r.time_zone;
   return {
     id: r.id,
     name: r.name,
@@ -113,15 +118,22 @@ export function toDirUser(r: Record<string, any>): DirUser {
     entityId: r.entity_id,
     roles: r.roles,
     managerId: r.manager_id,
-    timeZone: r.time_zone,
-    quietStart: r.quiet_start ?? null,
-    quietEnd: r.quiet_end ?? null,
+    // ADR-0015 (D-159): the vertical's zone and quiet hours when its GM set them; until then the person's stored ones.
+    timeZone,
+    quietStart: r.v_quiet_enabled === true ? r.v_quiet_start : r.v_quiet_enabled === false ? '00:00' : (r.quiet_start ?? null), // 00:00–00:00 = never quiet
+    quietEnd: r.v_quiet_enabled === true ? r.v_quiet_end : r.v_quiet_enabled === false ? '00:00' : (r.quiet_end ?? null),
     whatsappOptIn: r.whatsapp_opt_in,
     active: r.active,
     teamId: r.team_id ?? null,
     organizationId: r.organization_id,
+    work: scheduleOf({ timeZone, workDays: r.v_work_days ?? null, workStart: r.v_work_start ?? null, workEnd: r.v_work_end ?? null }, { ...DEFAULT_SETTINGS, ...(r.org_settings ?? {}) }),
   };
 }
+
+/** A person's row with their vertical's time settings and the organization's settings, as `toDirUser` reads it. */
+export const USER_SQL = `select u.*, e.time_zone as v_time_zone, e.quiet_enabled as v_quiet_enabled, e.quiet_start as v_quiet_start, e.quiet_end as v_quiet_end,
+    e.work_days as v_work_days, e.work_start as v_work_start, e.work_end as v_work_end, o.settings as org_settings
+  from users u join organizations o on o.id = u.organization_id left join entities e on e.id = u.entity_id and e.organization_id = u.organization_id`;
 
 // ponytail: per-process cache. People and matrix changes clear it on this instance at once; another instance sees
 // them within TTL_MS. Fine for the single-instance deployment; use a version row (or LISTEN/NOTIFY) beyond that.
@@ -133,7 +145,7 @@ export async function getDirectory(organizationId: number, db: Db = pool): Promi
   const hit = cached.get(organizationId);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.dir;
   const [{ rows }, matrix] = await Promise.all([
-    db.query('select * from users where organization_id = $1 order by id', [organizationId]),
+    db.query(`${USER_SQL} where u.organization_id = $1 order by u.id`, [organizationId]),
     getRoleMatrix(organizationId, db),
   ]);
   const dir = new Directory(rows.map(toDirUser), matrix);

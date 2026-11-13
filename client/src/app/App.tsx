@@ -7,9 +7,9 @@ import { AuthContext, useAuth, useDocumentTitle, useMe, type AuthCtx } from '../
 import { sessionApi, toClientUser, type Bootstrap } from '../services/api/session';
 import { ApiError } from '../services/authz/permissions';
 import { BACKEND } from '../services/http';
-import { getDb, getSession, setSession, subscribe, tick } from '../services/mock/store';
+import { getDb, getSession, setServerTime, setSession, subscribe, tick } from '../services/mock/store';
 import type { User } from '../types';
-import { ROUTES, type RouteDef } from './routes';
+import { ROUTES, serverAllows, type RouteDef } from './routes';
 import { Shell } from './Shell';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false, refetchOnWindowFocus: false } } });
@@ -39,6 +39,7 @@ function resolveAuth(): AuthState {
 async function resolveServerAuth(): Promise<AuthState> {
   try {
     const bootstrap = await sessionApi.me();
+    setServerTime(bootstrap.serverTime);
     return { user: toClientUser(bootstrap), bootstrap };
   } catch (e) {
     return { user: null, expired: e instanceof ApiError && e.message === 'SESSION_EXPIRED' };
@@ -60,7 +61,7 @@ function Guarded({ route }: { route: RouteDef }) {
   useDocumentTitle(route.title);
   if (BACKEND === 'server') {
     if (!route.server) return <NotYetConnected title={route.title} />;
-    if (route.server !== true && ![route.server].flat().some((p) => auth.permissions?.includes(p))) return <AccessDenied message={`"${route.title}" is not available for your role and scope.`} />;
+    if (!auth.bootstrap || !serverAllows(route, auth.bootstrap)) return <AccessDenied message={`"${route.title}" is not available for your role and scope.`} />;
     return <>{route.element}</>;
   }
   if (route.allow && !route.allow(getDb(), user)) return <AccessDenied message={`"${route.title}" is not available for your role and scope.`} />;

@@ -37,7 +37,7 @@ notificationsRouter.get('/notifications', async (req, res) => {
     pool.query(
       `select n.id, n.event, n.subject, n.body, n.task_id, n.created_at, n.read_at,
               coalesce((select json_agg(json_build_object('channel', d.channel, 'status', d.status) order by d.channel)
-                          from notifications d where d.parent_id = n.id), '[]') as deliveries
+                          from notifications d where d.parent_id = n.id and d.channel <> 'push'), '[]') as deliveries
          from notifications n where ${where.join(' and ')}
         order by n.created_at desc, n.id desc limit ${p(q.limit + 1)}`,
       params,
@@ -100,7 +100,7 @@ async function deliveries(where: string, params: unknown[], limit: number) {
             n.template, n.template_params, n.link, n.level, n.send_after, n.created_at, n.sent_at, n.attempts, n.error,
             exists (select 1 from escalation_recipients r where r.escalation_id = n.escalation_id and r.user_id = n.user_id and r.kind = 'cc') as copied
        from notifications n join users u on u.id = n.user_id
-      where n.channel <> 'inapp' and ${where}
+      where n.channel not in ('inapp', 'push') and ${where}
       order by n.created_at desc, n.id desc limit ${limit}`,
     params,
   );

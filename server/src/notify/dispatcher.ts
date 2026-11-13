@@ -2,7 +2,10 @@ import { WHATSAPP_ENABLED } from '@taskwatch/shared/notifications';
 import * as clock from '../clock.js';
 import { MINUTE } from '../clock.js';
 import { pool } from '../db/pool.js';
+import { config } from '../config.js';
 import { sendEmail, sendWhatsApp, type OutgoingMessage } from './channels.js';
+import { taskEmail, type TaskContext } from './emailTemplates.js';
+import { pushToUser } from './push.js';
 
 const MAX_ATTEMPTS = 3;
 const LEASE_MS = 10 * MINUTE;
@@ -33,6 +36,25 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+/** The designed email for a task alert, from the task as it stands now; undefined = plain shell. */
+async function taskHtml(n: { task_id: number | null; user_id: number; event: string; body: string; link: string | null }): Promise<string | undefined> {
+  if (n.task_id == null) return undefined;
+  const { rows } = await pool.query(
+    `select t.id, t.title, t.priority, t.status, t.due_at, t.level, t.description, t.assignee_id, e.name entity, a.name assignee, g.name assigner, u.time_zone
+       from tasks t join entities e on e.id = t.entity_id join users a on a.id = t.assignee_id join users g on g.id = t.assigner_id
+       join users u on u.id = $2
+      where t.id = $1`,
+    [n.task_id, n.user_id],
+  );
+  const r = rows[0];
+  if (!r) return undefined;
+  const ctx: TaskContext = {
+    id: r.id, title: r.title, entity: r.entity, priority: r.priority, status: r.status, dueAt: r.due_at, level: r.level,
+    assignee: r.assignee, assigneeId: r.assignee_id, assigner: r.assigner, description: r.description, recipientId: n.user_id, timeZone: r.time_zone,
+  };
+  return taskEmail(n.event, ctx, n.body, n.link ?? `${config.appUrl}/tasks/${r.id}`, clock.now());
+}
+
 /** Send every WhatsApp and email alert whose time has come; log the outcome on each row. */
 export async function dispatchDue(limit = 100): Promise<number> {
   if (!enabled || running) return 0;
@@ -48,7 +70,7 @@ export async function dispatchDue(limit = 100): Promise<number> {
            and ((status in ('pending','held') and send_after <= $1) or (status = 'sending' and claimed_at < $4))
          order by send_after, id limit $2 for update skip locked)
        returning *`,
-      [now, limit, WHATSAPP_ENABLED ? ['email', 'whatsapp'] : ['email'], new Date(now.getTime() - LEASE_MS)],
+      [now, limit, WHATSAPP_ENABLED ? ['email', 'whatsapp', 'push'] : ['email', 'push'], new Date(now.getTime() - LEASE_MS)],
     );
     for (const n of rows) {
       const msg: OutgoingMessage = {
@@ -61,7 +83,18 @@ export async function dispatchDue(limit = 100): Promise<number> {
         taskId: n.task_id,
       };
       try {
-        const result = n.channel === 'whatsapp' ? await sendWhatsApp(msg) : await sendEmail(msg, n.event === 'digest' ? n.body : undefined);
+        if (n.channel === 'push') {
+          // ADR-0012: one row, every browser the person enabled. None left (all revoked meanwhile) = skipped.
+          const r = await pushToUser(n.user_id, { title: n.subject, body: String(n.body).slice(0, 240), url: n.link ?? `${config.appUrl}/notifications`, tag: `tw-${n.parent_id ?? n.id}` });
+          await pool.query('update notifications set status = $2, sent_at = $3, error = $4 where id = $1', [
+            n.id,
+            r.simulated ? 'simulated' : r.delivered ? 'sent' : 'skipped',
+            clock.now(),
+            r.delivered || r.simulated ? null : 'No browser enabled for notifications',
+          ]);
+          continue;
+        }
+        const result = n.channel === 'whatsapp' ? await sendWhatsApp(msg) : await sendEmail(msg, n.event === 'digest' ? n.body : await taskHtml(n));
         await pool.query(`update notifications set status = $2, sent_at = $3, provider_id = $4, error = null where id = $1`, [
           n.id,
           result.simulated ? 'simulated' : 'sent',

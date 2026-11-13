@@ -19,7 +19,7 @@
 | WO AC | Criterion (short) | Test cases |
 |---|---|---|
 | AC-1 | Critical silent: L0/L1/L2/L3 at 4/6/8/12 h, each within 5 min | TC-ESC-01-05, TC-ESC-01-06, TC-ESC-08-02 |
-| AC-2 | Past due: L1 at due, L2 +24 h, L3 +72 h whatever updates | TC-ESC-02-01, -02, -04 |
+| AC-2 | Past due: L1 at due, L2/L3 at the stored milestones, whatever updates (+24 h/+72 h with the shipped policy; "per approved policy", D-140) | TC-ESC-02-01, -02, -04, -05, -06 |
 | AC-3 | Blocked alerts the team lead within 5 min | TC-WF-11-01, -02, -03, -04 |
 | AC-4 | Lead/manager comment does not reset; assignee update does | TC-CMT-01-01, TC-WF-03-01 |
 | AC-5 | Each alert reaches the right person on WhatsApp and email, logged | TC-ESC-04-01…06, TC-NTF-02-01, -02, -06, TC-DLV-01-02 |
@@ -87,6 +87,13 @@
 | TC-TASK-09-01 | I | Tasks covering each case | `GET` list with each FR-10 view: All open, Escalated to me, Red, Blocked, Closed | Each view returns exactly the matching visible tasks; "Escalated to me" = tasks with an active escalation where the caller is a recipient | TASK-09, WO FR-10 | planned |
 | TC-TASK-10-01 | E | Tasks at on-track, L0, L1, L2, L3 | Open the task list | Stage stripe colour per task = on track / amber (L0–L1) / red (L2–L3) per D-49; summary tiles equal the counts of TC-TASK-09-01 | TASK-10, WO FR-10 | planned |
 | TC-TASK-10-02 | I | Tasks from earlier tests | StaffA1, LeadA, CoS `GET /api/tasks/summary` and `GET /api/tasks?scope=all&view=all` | open = onTrack + amber + red; each row's `stage` matches its level; closed/draft null | TASK-10-AC-1/2 | **passed 2026-11-07** (owner's `npm test`) |
+| TC-TASK-01-09 | I | — | LeadA creates with `startDate` + `startTime` 12:00; then a start after the due time | Start kept at 12:00 in the giver's zone; second → 422 `startDate` "The scheduled start must be before the due time." | TASK-01, D-144 | written 2026-11-12 (`api.test.ts` "the scheduled start keeps its time of day, in the giver’s zone", "a start after the due time is refused"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-TASK-01-10 | I | — | Create with `submissionRequirements`; read; edit | Stored, returned on the task, editable | TASK-01, ADR-0014 | written 2026-11-12 (`api.test.ts` "submission requirements are stored, shown on the task and editable"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-TASK-01-11 | I | — | Review-required task with no reviewer; with a reviewer lacking `review_tasks`; with the assignee as reviewer | Reviewer = giver; 422 `reviewerId` twice | TASK-01, ADR-0014 | written 2026-11-12 (`api.test.ts` "the reviewer defaults to the giver; a chosen reviewer must be able to review and cannot be the assignee"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-TASK-01-12 | I | — | `assigneeIds` [A1, A2]; then a list with an invalid person, a duplicate, an empty list, or with `assigneeId` too | Two tasks, each with its own milestones; the bad lists → 422 and no task created | TASK-01, D-153 | written 2026-11-12 (`api.test.ts` "several assignees: one task per person, each with its own milestones", "several assignees is all or none, and the list is checked"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-TASK-01-13 | U | — | `overlaps`, `outsideWorkingHours`, `scheduleLabel` | Intersecting windows flagged, touching ones not; 22:00 IST outside 09:00–18:00; "Scheduled" until the start | TASK-01, TASK-11, D-151 | written 2026-11-12 (`schedule.test.ts` "schedule helpers (US-01, US-04, D-151)"); passed 2026-11-12 (pure 154/154, ADR-0014 session ledger) |
+| TC-TASK-01-14 | E | Lead with two reports | Create a task with start 12:00, due 13:30, and "Also assign to"; due outside the assignee's hours | Duration 1 h 30 min shown; soft warning shown, save not blocked; one task per person | TASK-01, D-151, D-153 | partial 2026-11-12: form checked in the browser in mock mode (ADR-0014 ledger); the warning banner and 360 px not checked |
+| TC-TASK-11-01 | I | F-ORG | StaffA1, LeadA and a person outside the line call `GET /api/schedule` for themselves, StaffA1 and another line; LeadA with `team=1` | Own day 200; lead sees their line; outside scope 404; team view lists the line with overlaps flagged | TASK-11, US-01, US-04 | written 2026-11-12 (`api.test.ts` "ADR-0014 schedule (US-01, US-04)", 2 cases); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
 | TC-EXT-04-01 | I | LeadA overseer of a task | LeadA changes the due date directly with a reason, then tries again | First change logged with old date, new date and reason; second → 403 (lead once); MgrA and CoS can still change it | EXT-04, WO FR-5 | planned |
 
 ## WF: Task workflow
@@ -105,7 +112,7 @@
 | TC-WF-05-01 | I | Task with active L1 | Assignee marks Done | → done, `closed_at`=now; escalations cleared; giver notified | WF-05, WO FR-2 | planned |
 | TC-WF-06-01 | I | Submitted task | Reviewer = assignee tries; real reviewer rejects with no comment; then requests changes; decides again | 403; 422; → `changes_requested` + clock restarts; 409 (no pending round) | WF-06 | planned |
 | TC-WF-07-01 | I | Critical task at L1 | MgrA reassigns to StaffA2; LeadA tries to reassign | Level −1; `clock_started_at`=now; assignee changed; LeadA 403 | WF-07, WO FR-6 | existing test: "reassigning restarts the clock for the new assignee", **passed 2026-11-04** |
-| TC-WF-07-02 | I | Past-due task | MgrA reassigns | Past-due floor still applies; both people notified; log row `reassign` with before/after | WF-07 | planned |
+| TC-WF-07-02 | I | Past-due task | MgrA reassigns without a new due time; then with one | 422 `dueDate` "This task is past due or due within 10 minutes: set a new due time for the new assignee." (D-148); then 200, new milestones, `due_change` logged with the reassignment, both people notified | WF-07, D-148 | written 2026-11-12 (`api.test.ts` "reassigning a task that is past due, or due within 10 minutes, needs a new due time"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger). Same rule through Edit: "D-148 also holds when the assignee is changed through Edit"; both passed in the full `npm test` 336/336, `npm run e2e` 4/4, typecheck 0 (2026-11-12) |
 | TC-WF-08-01 | I | Task with active escalations | Giver cancels with a reason | → `cancelled`; escalations resolved; assignee notified; no further engine activity | WF-08 | planned |
 | TC-WF-09-01 | I | Completed task | Giver reopens with a past due date; then a future one | 422; then → `reopened`, clock restarts, ack cleared | WF-09 | planned |
 | TC-WF-10-01 | I | Each F-ORG user | Compare `allowedActions` on detail with the result of calling each action | Every action not in the set returns 403/409; every listed action succeeds | WF-10, C-2 | planned |
@@ -167,6 +174,9 @@ The FR-5 direct change is feature **EXT-04** (added after this inventory); its c
 | TC-ESC-02-02 | U | Critical, clock just reset, 30 h past due | `computeLevel` | silenceLevel −1, overdueLevel 2, level 2, reason overdue | ESC-02, **AC-2** | existing test: "applies even when updates continue (clock just reset)", **passed 2026-11-04** |
 | TC-ESC-02-03 | U | High task past due | Move the due date into the future | Level 2 → −1 | ESC-02, WO FR-5 | existing test: "extending the due date drops the past-due level", **passed 2026-11-04** |
 | TC-ESC-02-04 | I | Normal task due in 10 h | Assignee posts an update at due+1 min, +24 h, +72 h; run the engine after each | Levels 1, 2, 3 regardless of updates | ESC-02, **AC-2** | existing test: "past due reaches L1 at the due time, L2 at +24 h and L3 at +72 h whatever updates were posted; extending clears it", **passed 2026-11-04** |
+| TC-ESC-02-05 | U | — | `deadlineMilestones` with ship and per-priority delays; `computeLevel` with stored milestones and hourly progress; rules without delays | L1 at due, +24 h/+72 h shipped; Critical 30 min/2 h; progress never moves the level; stored milestones win; old rules use their offsets or the shipped delays | ESC-02, D-140, **AC-2** | written 2026-11-12 (`rules.test.ts` "ADR-0014 policy: milestones and field-level inheritance", "ADR-0014 ladder: stored deadline milestones", "ADR-0014 rules saved before the change"); passed 2026-11-12 (pure 154/154, ADR-0014 session ledger) |
+| TC-ESC-02-06 | I | — | Create; change the due time; change priority to Critical; publish a draft; run the engine at due + 30 min with Critical 30 min | Stamped with +24 h/+72 h and `default@n`; both move with the due time; Critical delays; draft stamped on assign; L2 at due + 30 min | ESC-02, D-140, **AC-2** | written 2026-11-12 (`api.test.ts` "ADR-0014 deadline milestones are stored on the task (D-140, D-146)"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-ESC-02-07 | I | Open BAIS task | Change the policy; then `POST /api/rules/BAIS/apply` | Milestones unchanged after the save; apply re-stamps them, `updated ≥ 1`, `admin_log` `rules_applied` | ESC-02, POL-04, D-146 | written 2026-11-12 (`api.test.ts` "a policy change does not move an open task’s milestones (D-146)", "apply restamps the vertical’s open tasks …"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
 | TC-ESC-03-01 | U | Critical 13 h silent, 1 h past due | `computeLevel` | Level 3, reason silence | ESC-03 | existing test: "a task sits at the highest level any rule gives it", **passed 2026-11-04** |
 | TC-ESC-03-02 | U | Overdue-only task at L2 | `levelApplies(0..3)` | false, true, true, false | ESC-03 | existing test: "L0 applies only while the assignee is silent; L1+ whenever the task sits at or above", **passed 2026-11-04** |
 | TC-ESC-03-03 | I | Engine run twice at the same instant | Count escalations | No duplicates (unique active task+level index, `001_init.sql:141`) | ESC-03, NFR Reliability | planned |
@@ -177,12 +187,19 @@ The FR-5 direct change is feature **EXT-04** (added after this inventory); its c
 | TC-ESC-04-05 | U | Lead's own task | Route L1 for user 4 | {3} cc {4} | ESC-04 | existing test: "a lead’s own task skips to the next level up", **passed 2026-11-04** |
 | TC-ESC-04-06 | U | Lead 4 archived | Route L1 for staff 5 | {3} | ESC-04, STAFF-03 | existing test: "archived people are skipped", **passed 2026-11-04** |
 | TC-ESC-04-07 | U | User holding lead + staff (D-8) | Route that user's own task, and a report's task | Own task skips to their manager; report's task goes to them at L1 | ESC-04, D-8 | planned |
+| TC-ESC-04-08 | I | BAIS extra L2 recipient | Run a task to L2 | Extra recipient copied on L2 (never twice, never the assignee) | ESC-04, D-142 | written 2026-11-12 (`api.test.ts` "an extra L2 recipient is copied on L2"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
 | TC-ESC-05-01 | I | Critical task at L3, not acknowledged | Advance by one window repeatedly | One `repeat` per window to the top level's recipients | ESC-05 | planned |
 | TC-ESC-06-01 | I | Critical task at L3 | CoS acks L3 with a note; run the engine at +8 h, then +12 h 2 min | Level stays 3; no repeat while acknowledged; repeats resume after 12 h | ESC-06, ESC-05, WO FR-9 | existing test: "acknowledging pauses repeat alerts for 12 h but does not reset the clock", **passed 2026-11-04** |
 | TC-ESC-06-02 | I | Same | Copied assignee acks L1 | 403 (who may ack: D-84) | ESC-06 | existing test: "acknowledging pauses repeat alerts for 12 h but does not reset the clock", **passed 2026-11-04** |
 | TC-ESC-06-03 | I | Active escalation | Ack with an empty note | 422 (today 400, `services/tasks.ts:279`) | ESC-06, WO FR-9 | planned |
 | TC-ESC-06-04 | I | Cleared escalation | Ack it | 409 (today 400, `services/tasks.ts:286`) | ESC-06 | planned |
-| TC-ESC-07-01 | I | `dueSoonHours=24` | Advance to due−24 h, then past due | Due-soon to assignee once; overdue to assignee and giver once; none repeated for the same due date | ESC-07 | planned |
+| TC-ESC-07-01 | I | `dueSoonHours=24`, a long task | Advance to due−24 h, then past due | Due-soon to assignee once; no separate overdue notice; L1 copies the giver (D-143, ADR-0014 §9) | ESC-07 | existing test: "ESC-07 (D-143, ADR-0014 §9): one due-soon notice per due date for a long task; the overdue notice is folded into L1, which copies the giver", passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-ESC-07-02 | I | — | A task shorter than `dueSoonHours`; a task with a scheduled start | No due-soon; start notice once at start − 10 min | ESC-07, D-143, D-144 | written 2026-11-12 (`api.test.ts` "due-soon is skipped when the whole task is shorter than the due-soon window (D-143)", "the start notice goes out once, 10 minutes before the scheduled start"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-ESC-10-01 | I | Task due in 30 min | Run the engine at due − 11, − 10, again; assign a task inside the window; submit before the window | One `deadline_warning` at − 10 min; none when assigned inside the window (assignment says "Due in N min"); none after submission | ESC-10, US-05 | written 2026-11-12 (`api.test.ts` "the 10-minute warning goes to the assignee once, at due − 10 min", "no warning when assigned inside the window…", "no warning once the work is submitted"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-ESC-10-02 | U | — | `nextCountdown` with none; 11 vs 10 min; submitted/closed/draft; two overdue + one due soon | Empty; 10 min enters; excluded; oldest overdue first, then soonest | ESC-10, D-149 | written 2026-11-12 (`schedule.test.ts` "nextCountdown (US-05, D-149)", 4 cases); passed 2026-11-12 (pure 154/154, ADR-0014 session ledger) |
+| TC-ESC-10-03 | E | e2e server with DEMO_TOOLS; CoS → GM (head of BAIS) → Lead → Worker | Lead creates a Critical task due in 40 min; dev clock to due − 10 min, to due; GM sets Critical L2 = 30 min, saves, applies; clock to due + 30 min | Worker's pill shows ~10:00, then overdue; lead has L1; "1 open task rescheduled"; GM has L2 | ESC-10, ESC-02, POL-04, D-140, D-141, D-146 | written 2026-11-12 (`e2e/escalation-v2.spec.ts` "countdown, L1 at due, GM-tuned L2"); passed 2026-11-12 (`npm run e2e` 4/4) |
+| TC-ESC-11-01 | I | Review-required task | Submit before the due time, run past due; submit another after the due time; read the accountability report | On time: L1+ `accountable = reviewer`, reviewer is "to"; late: `assignee`; the report does not count reviewer escalations against the assignee | ESC-11, D-145, US-06 | written 2026-11-12 (`api.test.ts` "submitted on time: …", "submitted late: …", "the accountability report does not count …"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-ESC-11-02 | I | Critical task submitted | Run the engine at +29, +30 min (twice), +60 min; decide a review and run again | R1 once to the reviewer at the SLA; R2 to the reviewer's manager at 2 × SLA, reviewer copied; nothing after the decision | ESC-11, D-145 | written 2026-11-12 (`api.test.ts` "reviewer deadline: R1 …", "no reviewer reminder once the review is decided"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
 | TC-ESC-08-01 | I | Production config | Start the server with `ENGINE_INTERVAL_MS` unset, then 600000 | Default 60 s; 600 s refused or warned (must be ≤ 5 min) [A] | ESC-08, WO FR-8 | planned |
 | TC-ESC-08-02 | M | Pilot env | Create a Critical task; watch `escalations.fired_at` against the threshold | Every level fires within 5 min of its threshold in real time | ESC-08, **AC-1** | planned |
 | TC-ESC-08-03 | I | Two app instances on one DB | Run both schedulers through a threshold | One escalation per level; one digest; one chain check (S-15) | ESC-08 | planned |
@@ -203,7 +220,7 @@ The FR-5 direct change is feature **EXT-04** (added after this inventory); its c
 | TC-NTF-03-01 | U | 16:00 UTC | `isQuietTime` IST vs PT | IST quiet, PT not | NTF-03, AC-9 | existing test: "is quiet in IST and not in PT at the same instant", **passed 2026-11-04** |
 | TC-NTF-03-02 | U | — | IST 20:59, 21:00, 07:59, 08:00 | not, quiet, quiet, not | NTF-03, WO-D4 | existing test: "boundaries: 20:59 not quiet, 21:00 quiet, 07:59 quiet, 08:00 not quiet", **passed 2026-11-04** |
 | TC-NTF-03-03 | U | — | `quietEndsAt` IST and PT | 08:00 local next morning | NTF-03 | existing test: "held alerts are released at 08:00 local", **passed 2026-11-04** |
-| TC-NTF-03-04 | I | Task created 17:00 IST | Run the engine through L0, L1, L2 | L0/L1 WhatsApp and email `held` until 08:00 IST; L2 email to the PT manager `pending`; in-app `sent` | NTF-03 | existing test: "holds L0/L1 WhatsApp and email during the recipient’s quiet hours; L2 always goes out", **passed 2026-11-04** |
+| TC-NTF-03-04 | I | Task created 17:00 IST | Run the engine through L0, L1, L2 | L0 WhatsApp and email `held` until 08:00 IST; a Critical L1 email `pending`, not held (D-147); L2 email to the PT manager `pending`; in-app `sent` | NTF-03, D-147 | existing test: "holds L0/L1 WhatsApp and email during the recipient’s quiet hours; L2 always goes out" (updated for D-147), passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
 | TC-NTF-03-05 | I | Held rows | Advance to `send_after`; run the dispatcher | Rows dispatched | NTF-03 | planned |
 | TC-NTF-04-01 | I | — | StaffA1 turns off email for `escalation`, and for `progress` | Mandatory type refused (422); optional saved and honoured | NTF-04 | planned |
 | TC-NTF-05-01 | I | Monday 09:00 IST | Run the digest job twice | One email per manager (own line) and per FO member (whole org); red items, repeat offenders, on-time trend; second run sends nothing (`job_runs`) | NTF-05, WO FR-12 | planned |
@@ -279,6 +296,13 @@ The FR-5 direct change is feature **EXT-04** (added after this inventory); its c
 | TC-POL-01-03 | I | — | CoS sets a BAIS override; check a BAIS and an EMB task; `DELETE /api/rules/BAIS` | Only BAIS uses the override; reset restores defaults | POL-01, D-7 | planned |
 | TC-POL-01-04 | I | — | `PUT /api/rules/NOPE` | 422 (400 today, `rules.ts:26`) | POL-01 | planned |
 | TC-POL-02-01 | U | — | Simulator output vs server `computeLevel` on 100 random inputs | Identical (shared module, D-9) | POL-02 | planned |
+| TC-POL-04-01 | I | BAIS head = MgrA | Save a sparse BAIS row; change the global policy; read | Only the changed leaves stored; the rest inherited, and the global change shows through | POL-04, D-142 | written 2026-11-12 (`api.test.ts` "a vertical row holds only what it changed; …"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-POL-04-02 | I | — | Save L2 = 3 min, L3 ≤ L2, SLA 0, a recipient outside the vertical and the FO | 422 `d_<p>`, `sla_<p>`, `rcpt_<level>` | POL-01, POL-04 | written 2026-11-12 (`api.test.ts` "bounds: L2 ≥ 5 min, …"; `rules.test.ts`); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-POL-04-03 | I | BAIS head = MgrA | GM saves BAIS; saves EMB; saves Global; sends `quietHours` for BAIS | 200, version +1, `admin_log` under the GM; 404; 403; 422 and version unchanged | POL-04, D-141, D-150 | written 2026-11-12 (`api.test.ts` "the GM edits their own vertical: …", "a GM cannot edit another vertical (404) or the global policy (403), nor set organization-wide fields (422)"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-POL-04-04 | I | — | CoS overrides the GM value; GM reads history; GM resets; staff read `/api/rules` | History shows both actors; GM sees only own vertical + global; reset → follows global; staff see the global policy and their own vertical only | POL-04, D-150, US-03 | written 2026-11-12 (`api.test.ts` "the CoS overrides the GM’s value; …", "a GM resets their vertical …", "people outside policy administration read …"); passed 2026-11-12 (api 178/178, ADR-0014 session ledger) |
+| TC-POL-04-05 | U | — | `resolvePolicy`, `diffPolicy` | Leaf-level merge; a value equal to the global one is not stored | POL-04, D-142 | written 2026-11-12 (`rules.test.ts` "ADR-0014 policy: …", "ADR-0014 diffPolicy: what a vertical stores"); passed 2026-11-12 (pure 154/154, ADR-0014 session ledger) |
+| TC-POL-04-06 | I | — | Save, apply, save, reset and save EMB; read history | History versions equal the stored versions; an apply has no version; versions keep counting after a reset | POL-04 | written 2026-11-12 (`api.test.ts` "history versions are the stored versions: …") passed 2026-11-12 (full `npm test` 336/336, `npm run e2e` 4/4, typecheck 0 (2026-11-12)) |
+| TC-POL-04-07 | E | Server mode; MgrA heads BAIS | Open /admin/policies as the GM and as the CoS: edit, Custom tag, reset, history, apply | GM has no scope picker and lands on BAIS; CoS sees every scope | POL-04, US-02, US-03 | partial: CoS global scope checked in mock mode; GM save + apply covered by TC-ESC-10-03; the page as a GM not checked by hand in server mode |
 | TC-SET-01-01 | I | — | Save settings: timeout 4; zone `Mars/Base`; `retentionYears` 5; valid | 422; 422; ignored or 422 (fixed at 7); 200 + audit | SET-01 | planned |
 | TC-AUD-01-01 | I | Task with log rows | `DELETE /api/tasks/:id`, `PUT /api/tasks/:id/log/1`; SQL update, delete, truncate on `activity_log` | 404, 404; each SQL statement rejected "append-only" | AUD-01, **AC-7** | existing test: "activity log rows cannot be edited or deleted, by any endpoint or directly", **passed 2026-11-04** |
 | TC-AUD-01-02 | I | Clean chain | Chain check; alter a row with triggers bypassed; chain check again | ok, then not ok with the break; CoS notified `chain_break`; task detail `chain.ok=false` | AUD-01, **AC-7** | existing test: "the hash check flags a row altered directly in the database", **passed 2026-11-04** |
@@ -324,22 +348,22 @@ The FR-5 direct change is feature **EXT-04** (added after this inventory); its c
 | Area | Cases | Mapped to an existing server test |
 |---|---|---|
 | AUTH | 16 | 0 |
-| TASK | 24 | 5 |
-| WF | 21 | 5 |
+| TASK | 31 | 11 |
+| WF | 21 | 6 |
 | EXT | 6 | 2 |
 | CMT | 7 | 2 |
 | ATT | 7 | 0 |
-| ESC | 32 | 21 |
+| ESC | 42 | 30 |
 | NTF | 16 | 5 |
 | REC | 7 | 1 |
 | DASH | 7 | 2 |
 | RPT | 6 | 1 |
 | STAFF / ORG / ROLE | 10 / 2 / 2 | 0 / 0 / 0 |
-| POL / SET / AUD / DLV / SRCH / DEMO | 5 / 1 / 6 / 3 / 2 / 3 | 1 / 0 / 2 / 0 / 0 / 0 |
+| POL / SET / AUD / DLV / SRCH / DEMO | 12 / 1 / 6 / 3 / 2 / 3 | 7 / 0 / 2 / 0 / 0 / 0 |
 | Cross-cutting (C-n, SEC-n) | 7 | 2 |
-| **Total** | **190** | **49 case mappings, covering all 38 existing tests** |
+| **Total** | **214** | **71 case mappings** (49 from 2026-11-04 plus 22 ADR-0014 cases, 2026-11-12) |
 
-All 38 existing tests appear at least once (some cover several cases). Every case marked "existing" **passed on 2026-11-04** (`npm test`, 43/43).
+All 38 existing tests appear at least once (some cover several cases). Every case marked "existing" **passed on 2026-11-04** (`npm test`, 43/43). ADR-0014 cases (2026-11-12) cite the runs recorded in the ADR-0014 session ledger: api 178/178, pure 154/154, `npm run e2e` 4/4. The four later "ADR-0014 final-review fixes" tests were fixed the same day; then full `npm test` 336/336, `npm run e2e` 4/4, typecheck 0 (2026-11-12).
 
 ## Proposed D-numbers used in these docs
 
@@ -361,3 +385,19 @@ These are proposed and **not yet in** [OPEN_QUESTIONS.md](../01-discovery/OPEN_Q
 | D-91 | WO ladder: L1 includes "marked Blocked"; PRD WF-11 agrees; the server only sends a one-off lead alert and leaves the level unchanged (`services/tasks.ts:152-156`). Raise the level to L1? |
 | D-92 | Task title limits: server 3–200 (`routes/tasks.ts:52`) vs PRD 4–140. Which wins? |
 | D-93 | Manual digest: server lets managers send one to themselves (`admin.ts:47-52`); PRD NTF-05 restricts manual sending to `manage_system_settings`. Keep the manager self-preview? |
+
+## ADR-0015 cases (2026-11-13)
+
+| ID | Level | Pre | Steps | Expected | Feature | Status |
+|---|---|---|---|---|---|---|
+| TC-WT-01 | U | — | `worktime.test.ts` (7 cases) | Working-time elapsed/add skip nights, weekends, away; overnight; DST; ALWAYS = wall clock | ORG-03 | passed (`npm test` 371/371, `npm run e2e` 5/5, typecheck 0 (2026-11-13)) |
+| TC-WT-02 | U | — | `rules.test.ts` "D-160 working-time ladder" (4 cases) | Normal does not climb over a weekend; Critical does; L2/L3 in working minutes | ESC-02 | passed |
+| TC-WT-03 | I | BAIS Mon–Fri 09–18 IST | "a Normal task does not climb over the weekend; Critical does" | Normal −1 on Monday 08:59; Critical ≥ L1 | ESC-02 | passed |
+| TC-WT-04 | I | BAIS custom zone | "the vertical's time zone and quiet hours become each member's" | Directory gives the vertical's zone, quiet hours, schedule | ORG-03 | passed |
+| TC-WT-05 | I | Mon–Fri 09–18 | "L2 and L3 are stamped in working minutes for a Normal task" | Milestones = clock.add(due, 1440/4320 min) | ESC-02 | passed |
+| TC-ORG-03-01…03 | I | MgrA GM of BAIS | "ADR-0015 vertical working time" (3 cases) | GM sets working time, audited; validation 422; other vertical 404; open tasks keep milestones until apply | ORG-03 | passed |
+| TC-STAFF-06-01…03 | I | MgrA GM of BAIS | "ADR-0015 a GM runs their own vertical" (3 cases) | Add/edit/deactivate/reset in own vertical; 404 elsewhere; 403 for CoS role and GM change; departments scoped | STAFF-06 | passed |
+| TC-ATT-01…07 | I | MgrA GM of BAIS; FO staff 990 | "ADR-0015 attendance" (7 cases) | Marks + audit; today/past only; half-day range; who may mark; unmarked changes nothing; away notice once each; task page honours leave like the engine; own month only | ATT-01…03 | passed |
+| TC-ATT-08 | I | — | "leave today pauses Normal silence, not Critical", "a mark only counts from marked_at" | Paused vs climbing; no level drop, nothing cleared | ATT-03 | passed |
+| TC-REV-01…04 | U/I/E | — | reviewer fixes: "cannot make another vertical's person a department lead (reviewer C-1)", "re-saving a leave keeps the away time already counted (reviewer I-1)", e2e "Mark the N unmarked present" keeps leave (I-2), "a 60-day span is cheap" + "counts past 400 days" (I-3) | Each failed before its fix | ATT, STAFF-06 | passed (`npm test` 371/371, e2e 5/5) |
+| TC-ATT-E2E | E | e2e stack | `attendance.spec.ts` | GM marks leave in the UI; Normal −1, Critical ≥ L1 after 2 h; one notice each; My attendance; "Assignee on leave" | ATT-01…03 | passed (`npm run e2e` 5/5) |

@@ -226,19 +226,19 @@ export function reportCsv(id: ReportId, r: Report, zone: string): (string | numb
   const t = (x: string) => cellTime(x, zone);
   switch (id) {
     case 'completion':
-      return [['Team', 'Created', 'Completed', 'Completion rate', 'On-time rate'], ...r.teamRows.map((x) => [x.name, x.assigned, x.completed, x.completionRate, x.onTimeRate])];
+      return [['Department', 'Created', 'Completed', 'Completion rate', 'On-time rate'], ...r.teamRows.map((x) => [x.name, x.assigned, x.completed, x.completionRate, x.onTimeRate])];
     case 'overdue':
       return [['Task', 'Title', 'Assignee', 'Priority', 'Due', 'Level'], ...r.overdue.map((x) => [x.id, x.title, x.assignee.name, x.priority, t(x.dueAt), x.level])];
     case 'escalations':
       return [['Level', 'Triggered in range', 'Open now'], ...r.escalationsByLevel.map((x) => [`L${x.key}`, x.value, x.active])];
     case 'accountability':
       return [
-        ['Staff', 'Team', 'Assigned', 'Completed', 'On-time rate', 'Update compliance', 'Open now', 'Overdue now', 'L1+ escalations'],
+        ['Staff', 'Department', 'Assigned', 'Completed', 'On-time rate', 'Update compliance', 'Open now', 'Overdue now', 'L1+ escalations'],
         ...r.staffRows.map((x) => [x.name, x.team, x.assigned, x.completed, x.onTimeRate, x.compliance, x.openNow, x.overdueNow, x.escalations]),
       ];
     case 'teams':
       return [
-        ['Team', 'Created', 'Completed', 'Completion', 'On-time', 'Open now', 'Overdue now', 'Escalations'],
+        ['Department', 'Created', 'Completed', 'Completion', 'On-time', 'Open now', 'Overdue now', 'Escalations'],
         ...r.teamRows.map((x) => [x.name, x.assigned, x.completed, x.completionRate, x.onTimeRate, x.openNow, x.overdueNow, x.escalations]),
       ];
     case 'assignments':

@@ -1,13 +1,17 @@
 // The escalation ladder (WO FR-8, quiet hours) — the one implementation used by server and client (ADR-0007).
 // Pure: no dependencies, no Node or DOM APIs. Instants are epoch milliseconds; time zones use Intl.
 
+import { deadlineMilestones } from '@taskwatch/shared/policy';
+import { WALL_CLOCK, type WorkClock } from '@taskwatch/shared/worktime';
+
 const HOUR = 3_600_000;
 
 /** The rule fields the ladder needs. Server and client RulesConfig both satisfy it. */
 export interface LadderRules<P extends string = string> {
   windowsHours: Record<P, number>;
   multiples: readonly number[];
-  overdueOffsetsHours: readonly number[];
+  /** Minutes after the due time for L2 and L3, per priority (ADR-0014); used when a task carries no stored milestones. */
+  deadlineDelaysMinutes: Record<P, readonly [number, number]>;
 }
 
 export interface LevelInput<P extends string = string> {
@@ -15,8 +19,15 @@ export interface LevelInput<P extends string = string> {
   /** Last assignee update, or the (re)assignment time if there has been none. */
   clockStartedAt: number;
   dueAt: number;
+  /**
+   * The fixed instants at which L1, L2 and L3 apply (ADR-0014): stored on the task when its due time, priority or
+   * assignee changes, so neither progress nor a later policy change moves them. Absent: derived from the rules.
+   */
+  deadlineAt?: readonly [number, number, number];
   /** Marked Blocked: the task sits at L1 or higher while it stays blocked (WO ladder, D-24). */
   blocked?: boolean;
+  /** ADR-0015 (D-160): how silence time is counted; the vertical's working time minus away time, wall clock for Critical. */
+  silenceClock?: WorkClock;
   /** In review: the silence clock pauses, the past-due floor still applies (D-25). */
   silencePaused?: boolean;
 }
@@ -43,7 +54,8 @@ export function silenceThresholds<P extends string>(priority: P, cfg: LadderRule
 }
 
 export function computeLevel<P extends string>(t: LevelInput<P>, cfg: LadderRules<P>, now: number): LevelResult {
-  const silentMs = now - t.clockStartedAt;
+  const clock = t.silenceClock ?? WALL_CLOCK;
+  const silentMs = clock.elapsed(t.clockStartedAt, now);
   const overdueMs = now - t.dueAt;
   const thresholds = silenceThresholds(t.priority, cfg);
 
@@ -53,20 +65,21 @@ export function computeLevel<P extends string>(t: LevelInput<P>, cfg: LadderRule
       if (silentMs >= h * HOUR) silenceLevel = k;
     });
   }
+  const deadlineAt = t.deadlineAt ?? deadlineMilestones(t.dueAt, t.priority, cfg);
   let overdueLevel = -1;
-  cfg.overdueOffsetsHours.forEach((h, i) => {
-    if (overdueMs >= h * HOUR) overdueLevel = i + 1;
+  deadlineAt.forEach((at, i) => {
+    if (now >= at) overdueLevel = i + 1;
   });
   const blockedLevel = t.blocked ? 1 : -1;
 
   const level = Math.max(silenceLevel, overdueLevel, blockedLevel);
   const reason = level < 0 ? null : overdueLevel === level ? 'overdue' : silenceLevel === level ? 'silence' : 'blocked';
 
-  // Level k is reached at the earliest of its silence threshold (unless paused), its past-due offset (L1+)
+  // Level k is reached at the earliest of its silence threshold (unless paused), its deadline milestone (L1+)
   // and, for L1, now when blocked. Infinity = not reachable while things stay as they are.
   const reachedAt = thresholds.map((h, k) => {
-    const candidates = t.silencePaused ? [Infinity] : [t.clockStartedAt + h * HOUR];
-    if (k >= 1) candidates.push(t.dueAt + cfg.overdueOffsetsHours[k - 1]! * HOUR);
+    const candidates = t.silencePaused ? [Infinity] : [clock.add(t.clockStartedAt, h * HOUR)];
+    if (k >= 1) candidates.push(deadlineAt[k - 1]!);
     if (k === 1 && t.blocked) candidates.push(now);
     return Math.min(...candidates);
   });

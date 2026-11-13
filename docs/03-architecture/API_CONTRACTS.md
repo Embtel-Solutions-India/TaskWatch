@@ -160,3 +160,15 @@ All return `404` when `config.demoTools` is false (always false in production [V
 | Method + path | Purpose | Authz | Adapts |
 |---|---|---|---|
 | `GET /api/health` | `{ok, db: true}` for uptime checks (PRD NFR Observability [A]) | public, no data | **new** |
+
+## ADR-0015 endpoints (2026-11-13)
+- **Attendance:**
+  - `PUT /api/attendance` marks people (the GM of their vertical; the CoS for the Founder's Office).
+  - `GET /api/attendance` lists the people the caller marks, with their days.
+  - `GET /api/attendance/me` returns the caller's own month.
+- **Working time:** `PUT /api/entities/:id/worktime` sets a vertical's working time (its GM or the CoS).
+- **GM scope:** `/api/people`, `/api/people/:id` (PUT, status, reset-access) and `/api/teams*` now accept a GM for their own vertical (404 outside it).
+- **Data changes:**
+  - `/api/me` adds `hasAttendance`;
+  - task views add `assigneeAwayUntil` and `assigneeAwayKind`;
+  - `/api/org` entities add `worktime`.

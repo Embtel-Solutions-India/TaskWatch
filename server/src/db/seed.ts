@@ -9,7 +9,7 @@ import { setDispatcherEnabled } from '../notify/dispatcher.js';
 import { getDirectory, invalidateDirectory, type DirUser } from '../services/directory.js';
 import { saveRecurring } from '../services/recurring.js';
 import { invalidateRules } from '../services/rules.js';
-import { acknowledge, changeDue, createTask, postUpdate, reassignTask } from '../services/tasks.js';
+import { acknowledge, changeDue, completeTask, createTask, postUpdate, rateTask, reassignTask } from '../services/tasks.js';
 import { addComment } from '../services/collab.js';
 import { migrate } from './migrate.js';
 import { pool } from './pool.js';
@@ -92,6 +92,12 @@ interface Spec {
   ups?: Up[];
   comments?: Array<[number, string, string]>;
   extend?: [number, string, number, string];
+  /** The giver's outcome rating (0–100), given just after the task is done. */
+  rate?: number;
+  /** Estimated hours (default 2); done tasks get their whole window so finishing on time never trips the over-time rule. */
+  hours?: number;
+  /** Delay reason given when finishing late (D-125 requires one). */
+  reason?: string;
   reassign?: [number, string, string, string];
   acks?: Array<[number, string, number, string]>;
 }
@@ -256,8 +262,6 @@ const DONE_TITLES: Record<string, string[]> = {
   BAAS: ['September credit card reconciliation', 'Quarterly P&L — Embtel', 'Vendor payments batch', 'State payroll returns — Q3'],
 };
 
-const DONE_PEOPLE = ['sofia', 'kevin', 'meera', 'ananya', 'rohit', 'fatima', 'arjun', 'neha', 'vikram', 'aditya', 'sneha', 'ethan', 'pooja', 'carlos', 'priya'];
-
 const WINDOW: Record<Priority, number> = DEFAULT_RULES.windowsHours;
 
 function rng(seed: number) {
@@ -270,31 +274,37 @@ function rng(seed: number) {
   };
 }
 
-/** Closed tasks over the last three weeks, so the accountability dashboard has history. */
+/**
+ * Closed, rated tasks for every lead and staff member over the last eight weeks, so the accountability dashboard has
+ * history and the leaderboard ranks people: at least 6 are due in the last 11 days, which is inside "This month" from the
+ * 12th on (ranking needs RANK_MIN_TASKS = 5). Each person has a steady skill level so the board shows a real spread.
+ */
 function doneTasks(people: Map<string, Person>): Spec[] {
   const rand = rng(2026);
   const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)]!;
   const used = new Map<string, number>();
   const out: Spec[] = [];
-  for (const key of DONE_PEOPLE) {
-    const p = people.get(key)!;
-    const count = 1 + Math.floor(rand() * 2);
-    for (let i = 0; i < count; i++) {
+  for (const p of PEOPLE.filter((x) => x.roles.includes('lead') || x.roles.includes('staff'))) {
+    const skill = 55 + rand() * 40;
+    // ponytail: "This month" ranks only from the ~12th; seed later in the month or pick "Custom" earlier.
+    const dueAgos = [...Array.from({ length: 6 }, () => 6 + rand() * 250), ...Array.from({ length: 4 }, () => 280 + rand() * 1050)];
+    for (const dueAgo of dueAgos) {
       const titles = DONE_TITLES[p.entity]!;
       const n = used.get(p.entity) ?? 0;
       used.set(p.entity, n + 1);
+      const batch = Math.floor(n / titles.length);
       const priority = pick<Priority>(['high', 'normal', 'normal', 'low', 'critical']);
       const w = WINDOW[priority];
       const d = Math.round(w * (1.5 + rand() * 2.5));
-      const c = Math.round(Math.max(d * 1.4, 60) + rand() * 380);
+      const c = Math.round(dueAgo + d);
       const first = Math.max(0.3, w * (0.2 + rand() * 1.3));
       const late = rand() < 0.2;
       const doneAfter = Math.max(first + 1, d * (late ? 1.05 + rand() * 0.3 : 0.45 + rand() * 0.5));
       const doneAgo = Math.max(0.5, c - doneAfter);
       const mid = c - first - (c - first - doneAgo) / 2;
       out.push({
-        title: titles[n % titles.length]!,
-        to: key,
+        title: titles[n % titles.length]! + (batch ? ` (batch ${batch + 1})` : ''),
+        to: p.key,
         by: p.manager!,
         priority,
         c,
@@ -304,6 +314,9 @@ function doneTasks(people: Map<string, Person>): Spec[] {
           [mid, 'Most of it is done; finishing the last items.'],
           [doneAgo, 'Completed and saved to the shared folder.', 'completed'],
         ],
+        hours: Math.min(d, 200),
+        reason: late ? 'Waited on missing documents from the client.' : undefined,
+        rate: Math.round(Math.min(100, Math.max(20, skill + (rand() - 0.5) * 25 - (late ? 15 : 0)))),
       });
     }
   }
@@ -325,6 +338,14 @@ async function insertDirectory(now: Date): Promise<Map<string, number>> {
     );
     ids.set(p.key, rows[0].id);
   }
+  // One team per lead in their entity, with their same-entity direct reports (the rule of migration 003, which runs on an empty DB here).
+  await pool.query(
+    `insert into teams (name, entity_id, lead_id, organization_id) select name || '''s team', entity_id, id, 1 from users where 'lead' = any (roles)`,
+  );
+  await pool.query(
+    `update users u set team_id = t.id from teams t
+      where (t.lead_id = u.id or (u.manager_id = t.lead_id and u.entity_id = t.entity_id)) and u.team_id is null`,
+  );
   await pool.query(`insert into sla_rules (organization_id, scope, config, updated_at) values (1, 'default', $1, $2)`, [JSON.stringify(DEFAULT_RULES), now]);
   invalidateDirectory();
   invalidateRules();
@@ -371,7 +392,7 @@ export async function seed(): Promise<void> {
           parentId: null,
           target: null,
           unit: null,
-          estimatedHours: 2,
+          estimatedHours: s.hours ?? 2,
           purpose: 'support',
         });
         taskIds.set(s, id);
@@ -381,10 +402,17 @@ export async function seed(): Promise<void> {
     const reassignAt = s.reassign?.[0];
     for (const [h, text, status] of s.ups ?? []) {
       const who = reassignAt != null && h < reassignAt ? s.reassign![2] : assignee;
-      events.push({ at: ago(h), label: `update ${s.title}`, run: () => postUpdate(person(who), taskIds.get(s)!, { body: text, status }) });
+      const run = status === 'completed' && s.reason
+        ? () => completeTask(person(who), taskIds.get(s)!, text, { shortfallReason: s.reason })
+        : () => postUpdate(person(who), taskIds.get(s)!, { body: text, status });
+      events.push({ at: ago(h), label: `update ${s.title}`, run });
     }
     for (const [h, by, text] of s.comments ?? []) {
       events.push({ at: ago(h), label: `comment ${s.title}`, run: async () => void (await addComment(person(by), taskIds.get(s)!, { body: text })) });
+    }
+    if (s.rate != null) {
+      const doneAt = Math.min(...(s.ups ?? []).filter((u) => u[2] === 'completed').map((u) => u[0]));
+      events.push({ at: ago(Math.max(0.25, doneAt - 0.25)), label: `rate ${s.title}`, run: () => rateTask(person(s.by), taskIds.get(s)!, { outcomeScore: s.rate }) });
     }
     if (s.extend) {
       const [h, by, newD, reason] = s.extend;

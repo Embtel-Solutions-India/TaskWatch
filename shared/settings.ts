@@ -26,6 +26,8 @@ export interface Settings {
   priorityWeights: { critical: number; high: number; normal: number; low: number };
   /** D-125: standard task times; the task form recommends an estimate from them. */
   standardTasks: StandardTask[];
+  /** D-135: email domains allowed to sign in with Google (organizations.google_domains). Empty = the server's GOOGLE_ALLOWED_DOMAINS. */
+  googleDomains: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -43,4 +45,5 @@ export const DEFAULT_SETTINGS: Settings = {
   digestHour: 9, // WO FR-12: Monday 09:00 IST
   priorityWeights: { critical: 1, high: 1, normal: 1, low: 1 },
   standardTasks: DEFAULT_STANDARD_TASKS,
+  googleDomains: [],
 };

@@ -19,7 +19,7 @@ import type { DirUser } from './directory.js';
 function merge(stored: Partial<NotificationPrefs> | undefined): NotificationPrefs {
   const d = defaultPrefs();
   if (!stored) return d;
-  return { inApp: { ...d.inApp, ...stored.inApp }, email: { ...d.email, ...stored.email }, whatsapp: { ...d.whatsapp, ...stored.whatsapp } };
+  return { inApp: { ...d.inApp, ...stored.inApp }, email: { ...d.email, ...stored.email }, whatsapp: { ...d.whatsapp, ...stored.whatsapp }, push: { ...d.push, ...stored.push } };
 }
 
 /** Preferences of several people at once (the notifier). */
@@ -40,14 +40,16 @@ export async function getPrefs(user: DirUser) {
 }
 
 const channel = z.partialRecord(z.enum(NOTIFICATION_TYPES, { error: 'Unknown notification type.' }), z.boolean({ error: 'Use true or false.' }));
-export const prefsSchema = z.object({ inApp: channel, email: channel, whatsapp: channel }).strict();
+// ADR-0012: push is optional so an older client that does not send it keeps the stored choice.
+export const prefsSchema = z.object({ inApp: channel, email: channel, whatsapp: channel, push: channel.optional() }).strict();
 
 /** Save one's own preferences. Mandatory types are stored on: the work order does not let them be switched off. */
 export async function savePrefs(user: DirUser, input: z.infer<typeof prefsSchema>): Promise<void> {
   const offTemplate = Object.keys(input.whatsapp).filter((t) => !WHATSAPP_TYPES.includes(t as NotificationType));
   if (offTemplate.length) throw invalid({ whatsapp: 'No approved WhatsApp template for this event' });
   const prefs = merge(input as Partial<NotificationPrefs>);
-  for (const ch of ['inApp', 'email', 'whatsapp'] as const) for (const t of MANDATORY_TYPES) prefs[ch][t] = true;
+  if (!input.push) prefs.push = (await prefsOf(pool, [user.id])).get(user.id)!.push;
+  for (const ch of ['inApp', 'email', 'whatsapp', 'push'] as const) for (const t of MANDATORY_TYPES) prefs[ch][t] = true;
   await tx(async (c) => {
     await c.query(
       `insert into notification_prefs (user_id, prefs, updated_at) values ($1, $2, $3)

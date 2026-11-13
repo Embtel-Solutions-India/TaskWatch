@@ -10,7 +10,7 @@ import { cx } from '../utils/format';
 
 interface Item {
   key: string;
-  group: 'Tasks' | 'People' | 'Teams' | 'Recent';
+  group: 'Tasks' | 'People' | 'Departments' | 'Recent';
   label: string;
   sub: string;
   go: () => void;
@@ -81,13 +81,13 @@ export function SearchPalette({ open, onClose }: { open: boolean; onClose: () =>
         go: close(canStaff ? `/admin/staff/${p.id}` : String(p.id) === String(user.id) ? '/profile' : `/admin/staff/${p.id}`),
         render: <Avatar name={p.name} size={22} />,
       })),
-      ...r.teams.map((t) => ({ key: `g-${t.id}`, group: 'Teams' as const, label: t.name, sub: 'Team · open team tasks', go: close(`/tasks/team?team=${t.id}`) })),
+      ...r.teams.map((t) => ({ key: `g-${t.id}`, group: 'Departments' as const, label: t.name, sub: 'Department · open tasks', go: close(`/tasks/team?team=${t.id}`) })),
     ];
   }, [q, open, res, recent, canStaff, user, nav, onClose, setRecent]);
 
   useEffect(() => setActive(0), [q]);
 
-  const groups = ['Recent', 'Tasks', 'People', 'Teams'] as const;
+  const groups = ['Recent', 'Tasks', 'People', 'Departments'] as const;
   return (
     <Dialog open={open} onClose={onClose} title="Search" description="Results only include records you are allowed to see.">
       <div className="search-box">
@@ -95,7 +95,7 @@ export function SearchPalette({ open, onClose }: { open: boolean; onClose: () =>
         <input
           autoFocus
           className="search-input"
-          placeholder="Task ID, title, person, team…"
+          placeholder="Task ID, title, person, department…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           role="combobox"
@@ -111,7 +111,7 @@ export function SearchPalette({ open, onClose }: { open: boolean; onClose: () =>
       </div>
       <div id="search-results" role="listbox" aria-label="Search results" className="search-results">
         {q.trim() && items.length === 0 && <p className="muted pad">No results you have access to for "{q}".</p>}
-        {!q.trim() && items.length === 0 && <p className="muted pad">Try a task ID like TW-1012, a person's name, or a team.</p>}
+        {!q.trim() && items.length === 0 && <p className="muted pad">Try a task ID like TW-1012, a person's name, or a department.</p>}
         {groups.map((g) => {
           const list = items.filter((i) => i.group === g);
           if (!list.length) return null;
@@ -122,7 +122,7 @@ export function SearchPalette({ open, onClose }: { open: boolean; onClose: () =>
                 const idx = items.indexOf(i);
                 return (
                   <div key={i.key} id={`sr-${i.key}`} role="option" aria-selected={idx === active} className={cx('search-item', idx === active && 'active')} onMouseEnter={() => setActive(idx)} onClick={i.go}>
-                    {i.render && g === 'People' ? i.render : <Icon name={g === 'Tasks' ? 'check-square' : g === 'Teams' ? 'users' : 'clock'} size={15} />}
+                    {i.render && g === 'People' ? i.render : <Icon name={g === 'Tasks' ? 'check-square' : g === 'Departments' ? 'users' : 'clock'} size={15} />}
                     <span className="search-item-text">
                       <strong>{i.label}</strong>
                       <small>{i.sub}</small>

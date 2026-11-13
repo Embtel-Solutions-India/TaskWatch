@@ -15,7 +15,10 @@ import { notificationsRouter } from './routes/notifications.js';
 import { peopleRouter } from './routes/people.js';
 import { recurringRouter } from './routes/recurring.js';
 import { performanceRouter } from './routes/performance.js';
+import { pushRouter } from './routes/push.js';
 import { rulesRouter } from './routes/rules.js';
+import { attendanceRouter } from './routes/attendance.js';
+import { scheduleRouter } from './routes/schedule.js';
 import { tasksRouter } from './routes/tasks.js';
 
 export function createApp(): express.Express {
@@ -49,7 +52,10 @@ export function createApp(): express.Express {
   api.use(tasksRouter);
   api.use(peopleRouter);
   api.use(rulesRouter);
+  api.use(scheduleRouter);
+  api.use(attendanceRouter); // ADR-0015
   api.use(notificationsRouter);
+  api.use(pushRouter); // ADR-0012
   api.use(dashboardRouter);
   api.use(reportsRouter);
   api.use(recurringRouter);

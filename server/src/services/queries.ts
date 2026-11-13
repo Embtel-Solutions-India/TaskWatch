@@ -12,6 +12,7 @@ import { can, canView, relation, taskActions, taskPermissions, visibilityFilter,
 import { presentKind, presentValues, verifyChains } from './activity.js';
 import type { Directory, DirUser } from './directory.js';
 import { getRuleSet } from './rules.js';
+import { awayIntervals, clockFor, type Away } from './worktime.js';
 import { timeUsed } from './tasks.js';
 
 /** FR-10 quick views (TASK-09), applied on top of the scope. 'all' (every status) is for server callers and scopes. */
@@ -39,7 +40,7 @@ export interface ListFilters {
 
 const TASK_COLUMNS = `
   t.id, t.organization_id, t.discarded_at, t.title, t.description, t.instructions, t.category, t.entity_id, en.name as entity_name, t.priority, t.status,
-  t.due_at, t.original_due_at, t.created_at, t.updated_at, t.assigned_at, t.start_at, t.clock_started_at, t.last_update_at,
+  t.due_at, t.deadline_l2_at, t.deadline_l3_at, t.policy_version, t.submission_requirements, t.original_due_at, t.created_at, t.updated_at, t.assigned_at, t.start_at, t.clock_started_at, t.last_update_at,
   t.acknowledged_at, t.snooze_until, t.progress, t.review_required, t.parent_id, t.recurring_id, t.occurrence_date,
   t.cancel_reason, t.completed_at, t.closed_at, t.blocked_reason, t.level, t.lead_extension_used,
   t.assignee_id, a.name as assignee_name, t.assigner_id, g.name as assigner_name, t.created_by, t.reviewer_id,
@@ -67,12 +68,21 @@ const FACTS = (me: string) => `,
 
 type Rules = Awaited<ReturnType<typeof getRuleSet>>;
 
+/** ADR-0015: the away marks of the assignees on these rows, so a list shows the level the engine will compute. */
+async function awayFor(rows: { assignee_id: number | null; clock_started_at: Date }[], dir: Directory, now: Date): Promise<Map<number, Away[]>> {
+  const people = [...new Set(rows.map((r) => r.assignee_id))].map((id) => (id ? dir.get(id) : undefined)).filter((u) => !!u);
+  const earliest = rows.reduce((m, r) => Math.min(m, r.clock_started_at?.getTime() ?? m), now.getTime());
+  return awayIntervals(pool, people as DirUser[], new Date(earliest), now);
+}
+
 /**
  * The API's TaskView (API_CONTRACTS §1): the task, its level computed now (TASK-04-AC-3), the viewer's allowed actions,
  * and only the names of the people on it — never contact details or anyone else's records.
  */
-function toTaskView(r: any, now: Date, rules: Rules, viewer: DirUser, dir: Directory) {
-  const info = taskLevel(r, rules.for(r.entity_id), now);
+function toTaskView(r: any, now: Date, rules: Rules, viewer: DirUser, dir: Directory, away: Map<number, Away[]>) {
+  const info = taskLevel(r, rules.for(r.entity_id), now, clockFor(r.assignee_id ? dir.get(r.assignee_id) : undefined, r.priority, away.get(r.assignee_id) ?? []));
+  // ADR-0015: when the assignee is marked away right now, until when (task page tag).
+  const awayNow = (away.get(r.assignee_id) ?? []).find((x) => x.from <= now.getTime() && x.to > now.getTime());
   return {
     id: r.id,
     title: r.title,
@@ -91,6 +101,12 @@ function toTaskView(r: any, now: Date, rules: Rules, viewer: DirUser, dir: Direc
     startAt: r.start_at,
     dueAt: r.due_at,
     originalDueAt: r.original_due_at,
+    // ADR-0014: the fixed instants of L1, L2 and L3 (null on a draft), and the policy rows they came from.
+    assigneeAwayUntil: awayNow ? new Date(awayNow.to) : null,
+    assigneeAwayKind: awayNow?.kind ?? null,
+    milestones: r.deadline_l2_at && r.deadline_l3_at ? [r.due_at, r.deadline_l2_at, r.deadline_l3_at] : null,
+    policyVersion: r.policy_version,
+    submissionRequirements: r.submission_requirements,
     clockStartedAt: r.clock_started_at,
     acknowledgedAt: r.acknowledged_at,
     snoozeUntil: r.snooze_until,
@@ -202,7 +218,8 @@ export async function listTasks(viewer: DirUser, dir: Directory, f: ListFilters)
   );
   const rules = await getRuleSet(viewer.organizationId);
   const now = clock.now();
-  return { items: rows.slice(0, LIST_CAP).map((r) => toTaskView(r, now, rules, viewer, dir)), truncated: rows.length > LIST_CAP };
+  const away = await awayFor(rows, dir, now);
+  return { items: rows.slice(0, LIST_CAP).map((r) => toTaskView(r, now, rules, viewer, dir, away)), truncated: rows.length > LIST_CAP };
 }
 
 /** TASK-08: the people the viewer may assign to, with their open load. */
@@ -228,16 +245,6 @@ export async function assigneeOptions(viewer: DirUser, dir: Directory, assignabl
     // PERF: estimated-hours load over the next 5 working days, for the assignee picker (FRD §5.8).
     load: { loadPercent: Math.round(work.get(u.id)!.loadPercent), band: work.get(u.id)!.band },
   }));
-}
-
-/** TASK-08: tasks the viewer can see that may be a parent (active or draft). */
-export async function parentOptions(viewer: DirUser, dir: Directory) {
-  const vis = visibilityFilter(viewer, dir, 't', 1);
-  const { rows } = await pool.query(
-    `select t.id, t.title from tasks t where ${vis.sql} and (t.status = 'draft' or ${openSql('t')}) order by t.created_at desc limit ${LIST_CAP}`,
-    vis.params,
-  );
-  return rows;
 }
 
 export async function taskSummary(viewer: DirUser, dir: Directory) {
@@ -277,7 +284,7 @@ export async function taskSummary(viewer: DirUser, dir: Directory) {
     mine: s.mine,
     escalated: s.escalated,
     needsAck: s.needs_ack,
-    l3: l3.rows.map((r) => toTaskView(r, now, rules, viewer, dir)),
+    l3: await (async (away) => l3.rows.map((r) => toTaskView(r, now, rules, viewer, dir, away)))(await awayFor(l3.rows, dir, now)),
   };
 }
 
@@ -285,7 +292,8 @@ export async function taskSummary(viewer: DirUser, dir: Directory) {
 export async function taskViewById(viewer: DirUser, dir: Directory, taskId: number) {
   const { rows } = await pool.query(`select ${TASK_COLUMNS} ${FACTS('$2')} ${TASK_JOINS} where t.id = $1`, [taskId, viewer.id]);
   if (!rows[0] || !canView(viewer, rows[0], dir)) throw notFound('Task not found');
-  const task = toTaskView(rows[0], clock.now(), await getRuleSet(viewer.organizationId), viewer, dir);
+  const now = clock.now();
+  const task = toTaskView(rows[0], now, await getRuleSet(viewer.organizationId), viewer, dir, await awayFor(rows, dir, now));
   return { task, actions: task.actions };
 }
 
@@ -302,8 +310,9 @@ export async function reviewQueue(viewer: DirUser, dir: Directory) {
   );
   const rules = await getRuleSet(viewer.organizationId);
   const now = clock.now();
+  const away = await awayFor(rows, dir, now);
   return rows
-    .map((r) => ({ task: toTaskView(r, now, rules, viewer, dir), submission: r.submission }))
+    .map((r) => ({ task: toTaskView(r, now, rules, viewer, dir, away), submission: r.submission }))
     .filter((x) => x.task.actions.includes('review'));
 }
 
@@ -323,8 +332,9 @@ export async function extensionQueue(viewer: DirUser, dir: Directory, status: (t
   );
   const rules = await getRuleSet(viewer.organizationId);
   const now = clock.now();
+  const away = await awayFor(rows, dir, now);
   return rows.map((r) => {
-    const task = toTaskView(r, now, rules, viewer, dir);
+    const task = toTaskView(r, now, rules, viewer, dir, away);
     return { ext: r.ext, task, canDecide: mayDecideExtension(viewer, dir, r, task, r.ext) };
   });
 }
@@ -357,8 +367,9 @@ export async function dashboardTasks(viewer: DirUser, dir: Directory, entity?: s
   const now = clock.now();
   const tasks: DashTask[] = [];
   const extensions: DashExtension[] = [];
+  const away = await awayFor(rows, dir, now);
   for (const r of rows) {
-    const v = toTaskView(r, now, rules, viewer, dir);
+    const v = toTaskView(r, now, rules, viewer, dir, away);
     tasks.push({
       id: v.id,
       title: v.title,
@@ -405,6 +416,7 @@ function escalationRow(e: any, viewer: DirUser) {
     id: e.id,
     level: e.level,
     reason: e.reason,
+    accountable: e.accountable, // D-145: 'reviewer' when the task was handed in on time and waits for review
     firedAt: e.fired_at,
     reachedAt: e.reached_at,
     cycleStartedAt: e.cycle_started_at,
@@ -459,8 +471,9 @@ export async function escalationList(viewer: DirUser, dir: Directory, f: Escalat
   const { rows: events } = await pool.query(`${ESCALATION_SELECT} where e.task_id = any($1) order by e.fired_at, e.level`, [shown.map((t) => t.id)]);
   const now = clock.now();
   const rules = await getRuleSet(viewer.organizationId);
+  const away = await awayFor(shown, dir, now);
   const rows = shown.map((r) => {
-    const task = toTaskView(r, now, rules, viewer, dir);
+    const task = toTaskView(r, now, rules, viewer, dir, away);
     const evs = events.filter((e) => e.task_id === r.id).map((e) => escalationRow(e, viewer));
     const open = evs.filter((e) => !e.clearedAt).sort((a, b) => b.level - a.level);
     const top = open[0] ?? [...evs].sort((a, b) => b.level - a.level)[0]!;
@@ -529,7 +542,7 @@ export async function taskDetail(viewer: DirUser, dir: Directory, taskId: number
 
   const rules = await getRuleSet(viewer.organizationId);
   const now = clock.now();
-  const task = toTaskView(r, now, rules, viewer, dir);
+  const task = toTaskView(r, now, rules, viewer, dir, await awayFor([r], dir, now));
   const activities = log.rows.map((l) => ({
     id: l.id,
     seq: l.seq,

@@ -40,7 +40,9 @@ export const STATUS_LABELS: Record<Status, string> = {
   cancelled: 'Cancelled',
 };
 
-export interface RulesConfig {
+import { DEFAULT_REVIEW_SLA, SHIP_DEADLINE_DELAYS, type PolicyExtras } from '@taskwatch/shared/policy';
+
+export interface RulesConfig extends PolicyExtras {
   /** D2: required update rhythm per priority, in hours. */
   windowsHours: Record<Priority, number>;
   /** D3: silence multiples for L0..L3. */
@@ -71,6 +73,10 @@ export const DEFAULT_RULES: RulesConfig = {
   repeatAfterWindows: 1,
   blockedAlertsLead: true,
   dueSoonHours: 24,
+  // ADR-0014: what ships equals the offsets above; the approved D-152 values are entered on the Policies page.
+  deadlineDelaysMinutes: SHIP_DEADLINE_DELAYS,
+  reviewSlaMinutes: DEFAULT_REVIEW_SLA,
+  extraRecipients: { l1: [], l2: [], l3: [] },
 };
 
 export type Stage = 'on_track' | 'amber' | 'red';

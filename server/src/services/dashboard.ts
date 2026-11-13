@@ -176,7 +176,7 @@ export async function teamOverview(viewer: DirUser, dir: Directory) {
   if (!can(viewer, dir, 'view_tasks') || (!orgWide && !people.length)) throw forbidden("You don't have permission to view your team.");
   const [{ tasks }, { rows: teams }] = await Promise.all([
     dashboardTasks(viewer, dir),
-    pool.query('select id, name from teams where organization_id = $1 and archived_at is null order by name', [viewer.organizationId]),
+    pool.query('select id, name, entity_id as "entityId" from teams where organization_id = $1 and archived_at is null order by name', [viewer.organizationId]),
   ]);
   const nameOf = (id: number | string) => dir.get(id as number)?.name ?? null;
   return buildTeamOverview(viewer.id, people.map((u) => ({ ...person(u), roles: u.roles, teamId: u.teamId, managerId: u.managerId })), tasks, teams, nameOf);

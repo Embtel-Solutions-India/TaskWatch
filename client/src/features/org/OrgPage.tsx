@@ -8,7 +8,7 @@ import { getOrg, setPlacement, type OrgData, type StaffRow } from '../../service
 import { ancestorsOf, wouldCreateLoop } from '../../services/authz/permissions';
 import { cx } from '../../utils/format';
 import { BACKEND } from '../../services/http';
-import { needsManager } from '@taskwatch/shared/permissions';
+import { labelDepartments, needsManager } from '@taskwatch/shared/permissions';
 
 /** Entity pill colours, cycled in entity order (theme tokens, so dark mode follows). */
 const PILL = ['var(--violet)', 'var(--ok)', 'var(--primary)', 'var(--warn)', 'var(--muted)'];
@@ -203,7 +203,7 @@ export function OrgPage() {
                 })}
             </Card>
           ))}
-          <Card title="No team">
+          <Card title="No department">
             <ul className="avatar-row">
               {users.filter((u) => !u.teamId).map((m) => (
                 <li key={m.id}>
@@ -227,7 +227,7 @@ function MoveDialog({ user, org, onClose }: { user: StaffRow; org: OrgData; onCl
   // ORG-02: one call, so the manager and the team change together or not at all.
   const place = useAction(setPlacement, { onSuccess: onClose });
   const loop = wouldCreateLoop(org, user.id, managerId || null);
-  const teams = org.teams.filter((t) => !user.entityId || t.departmentId === user.entityId);
+  const teams = labelDepartments(org.teams.filter((t) => !user.entityId || t.departmentId === user.entityId), (t) => t.departmentId);
   const save = () => place.run(user.id, managerId || null, teamId || null);
   return (
     <Dialog

@@ -1,6 +1,7 @@
 // Performance, progress and workload formulas (PERFORMANCE-FRD §5) — one definition for server and client (ADR-0007).
 // Pure: callers pass task facts; nothing here reads a database or the clock.
 import { wallClock, zonedInstant } from '@taskwatch/shared/levels';
+import { makeWorkClock } from '@taskwatch/shared/worktime';
 import { LADDER_STATUSES, type Status } from '@taskwatch/shared/workflow';
 
 /** People with fewer eligible tasks in the period are shown but not ranked. */
@@ -71,7 +72,7 @@ export function isRatable(
 }
 
 /** Done by the latest approved due date. An open task past its due date is late. */
-export function isOnTime(t: ScoredTask, now: Date): boolean {
+export function isOnTime(t: Pick<ScoredTask, 'dueAt' | 'completedAt' | 'submittedAt'>, now: Date): boolean {
   const finished = t.submittedAt ?? t.completedAt;
   if (finished) return finished.getTime() <= t.dueAt.getTime();
   return now.getTime() <= t.dueAt.getTime();
@@ -241,25 +242,7 @@ export function shiftOf(person: { quietStart: string | null; quietEnd: string | 
  * how long a task was open in working time. ponytail: no public holidays (owner accepted, 2026-11-11).
  */
 export function workingHours(from: Date, to: Date, zone: string, shift: Shift): number {
-  if (to.getTime() <= from.getTime()) return 0;
-  const [sh, sm] = shift.start.split(':').map(Number) as [number, number];
-  const [eh, em] = shift.end.split(':').map(Number) as [number, number];
-  const overnight = eh * 60 + em <= sh * 60 + sm;
-  const first = wallClock(zone, from.getTime());
-  let day = new Date(Date.UTC(first.year, first.month - 1, first.day - 1)); // the shift that began yesterday may still run
-  let ms = 0;
-  while (true) {
-    const y = day.getUTCFullYear(), m = day.getUTCMonth() + 1, d = day.getUTCDate();
-    const begin = zonedInstant(zone, y, m, d, sh, sm);
-    if (begin >= to.getTime()) break;
-    const dow = day.getUTCDay();
-    if (dow !== 0 && dow !== 6) {
-      const next = new Date(day.getTime() + 86_400_000);
-      const end = overnight ? zonedInstant(zone, next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), eh, em) : zonedInstant(zone, y, m, d, eh, em);
-      ms += Math.max(0, Math.min(end, to.getTime()) - Math.max(begin, from.getTime()));
-    }
-    day = new Date(day.getTime() + 86_400_000);
-  }
+  const ms = makeWorkClock({ zone, days: [1, 2, 3, 4, 5], start: shift.start, end: shift.end }).elapsed(from.getTime(), to.getTime());
   return Math.round((ms / 3_600_000) * 100) / 100;
 }
 

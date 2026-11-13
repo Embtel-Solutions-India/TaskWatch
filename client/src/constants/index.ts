@@ -1,3 +1,4 @@
+import { DEFAULT_REVIEW_SLA, SHIP_DEADLINE_DELAYS } from '@taskwatch/shared/policy';
 import type { NotificationType, Permission, Priority, Role, RulesConfig, Status } from '../types';
 
 export const HOUR = 3_600_000;
@@ -95,6 +96,9 @@ export const DEFAULT_RULES: RulesConfig = {
   dueSoonHours: 24,
   quietHours: { enabled: true, start: '21:00', end: '08:00' },
   l3NotifyCeo: true,
+  deadlineDelaysMinutes: SHIP_DEADLINE_DELAYS,
+  reviewSlaMinutes: DEFAULT_REVIEW_SLA,
+  extraRecipients: { l1: [], l2: [], l3: [] },
 };
 
 export { CATEGORIES } from '@taskwatch/shared/settings';

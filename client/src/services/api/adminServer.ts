@@ -2,7 +2,7 @@
 // BACKEND === 'server'. Maps the server's shapes onto the prototype's (string ids, a primary `role` beside
 // `roles`) so the pages keep their design.
 import { ROLE_RANK } from '../../constants';
-import type { Activity, ActivityType, Department, EscalationEvent, Permission, Role, Settings, Team, User } from '../../types';
+import type { Activity, ActivityType, Department, EscalationEvent, Permission, Role, Settings, Team, User, Worktime } from '../../types';
 import { http } from '../http';
 import type { OrgData, RecurrenceInput, RecurrenceRow, StaffInput, StaffProfile, StaffRow } from './admin';
 import type { TaskView } from './base';
@@ -28,6 +28,8 @@ interface ServerPerson {
   email?: string;
   phone?: string | null;
   whatsapp?: string | null;
+  /** How they sign in; sent with the contact fields. 'google': on an allowed Google domain, no password needed. */
+  signIn?: 'google' | 'both' | 'password';
   openTasks: number;
   overdueTasks: number;
 }
@@ -66,6 +68,7 @@ function person(r: ServerPerson): StaffRow {
     quietEnd: r.quietEnd ?? null,
     managerName: r.managerName,
     teamName: r.teamName,
+    signIn: r.signIn,
     openTasks: r.openTasks,
     overdueTasks: r.overdueTasks,
   };
@@ -175,20 +178,24 @@ export const adminServer = {
   setStaffStatus: (id: string, status: 'active' | 'inactive') => http<{ openTasks: number }>('POST', `/people/${id}/status`, { status }),
   /** The link is emailed by the server; no token ever reaches the browser. */
   resetAccess: async (id: string): Promise<string> => (await http('POST', `/people/${id}/reset-access`), ''),
+  /** D-172: the welcome email with a set-password link; emailed by the server. */
+  sendOnboarding: async (id: string): Promise<void> => void (await http('POST', `/people/${id}/onboarding-email`)),
 
   org: async (): Promise<OrgData> => {
     const [o, s] = await Promise.all([
-      http<{ entities: { id: string; name: string; headId: number | null }[]; teams: { id: number; name: string; entityId: string; leadId: number | null }[]; people: ServerPerson[]; overloadThreshold: number }>('GET', '/org'),
+      http<{ entities: { id: string; name: string; headId: number | null; worktime: Worktime }[]; teams: { id: number; name: string; entityId: string; leadId: number | null }[]; people: ServerPerson[]; overloadThreshold: number }>('GET', '/org'),
       http<{ timezone: string }>('GET', '/settings'),
     ]);
     return {
       users: o.people.map(person),
       teams: o.teams.map((t): Team => ({ id: String(t.id), name: t.name, departmentId: t.entityId, leadId: sid(t.leadId) })),
-      departments: o.entities.map((e): Department => ({ id: e.id, name: e.name, headId: sid(e.headId) })),
+      departments: o.entities.map((e): Department => ({ id: e.id, name: e.name, headId: sid(e.headId), worktime: e.worktime })),
       overloadThreshold: o.overloadThreshold,
       timezone: s.timezone,
     };
   },
+  /** ADR-0015 (D-159): a vertical's working time (its GM or the CoS). */
+  setWorktime: async (id: string, w: Worktime): Promise<void> => void (await http('PUT', `/entities/${id}/worktime`, w)),
   /** ORG-02: manager and team in one call, so the server commits both or neither. */
   setPlacement: async (userId: string, managerId: string | null, teamId: string | null): Promise<void> =>
     void (await http('PUT', `/people/${userId}/placement`, { teamId: nid(teamId) })), // ADR-0011: the line follows the department

@@ -2,6 +2,58 @@
 
 Each session appends its entry at the top. Write facts only, and link to documents instead of restating them.
 
+## 2026-11-13 (code-review fixes, D-171/D-172, release commit)
+- Done and committed on phases-8-10 with the owner's OK (CHANGELOG 2026-11-13): code-review fixes (GM reset keeps CoS fields, merged default policy saved, reassign due through doDueChange, reviewer reset, engine RuleSet once per run, history limit in SQL); D-171 absent L1 → L2; production builds always use the server; D-172 onboarding email (Staff page) with first-time set-password wording; Google sign-in button made prominent. Owner reported `npm test` green before the last two UI changes; e2e not run this session.
+- Production still needs: DB backup before migrations 017–019 run on first start; APP_URL, Brevo SMTP values, EMAIL_FROM_ADDRESS; GOOGLE_CLIENT_ID/SECRET/ALLOWED_DOMAINS and redirect URI `https://task.embtel.com/api/auth/google/callback`. Not merged to main.
+- Open: review items 8 (engine away-interval range) and 9 (`taskSummary` IIFE).
+
+## 2026-11-13 (emails, logo, task form, UI fixes; release prep)
+- Done, uncommitted on phases-8-10 (CHANGELOG 2026-11-12/13): branded email templates with inline (`cid:`) illustrations and logo, Brevo SMTP working (live test sent to the owner), SMTP DNS fix, `EMAIL_FROM_ADDRESS` takes `Name <addr>`; new logo across the app; D-154 (Category / Parent task / Quality / Efficiency removed); D-155 task form redesign with the working-hours estimate; Policies min/h durations and reset row; number-input leading-zero fix; popover placement fix; Escalations recipient column; Attention panel. Typecheck client + server 0; browser-checked. **`npm test` and e2e NOT run since these changes** (one API test edited for D-154, the parent-options assertion removed).
+- Owner asked about production. Waiting on the owner: OK to run `npm test` + e2e, then OK to commit, merge to main and push. Production needs APP_URL=https://task.embtel.com, the Brevo SMTP values, EMAIL_FROM_ADDRESS=taskwatch@embtel.com, the server IP authorised in Brevo, a DB backup before migrations 017–019.
+- Open decisions for the owner: timeliness scoring proposal (proposed in chat, not recorded; next free number D-156); keep or delete the unsent `welcomeEmail` template (D-126); night-team estimate (KI-66).
+
+## 2026-11-13 (ADR-0015 attendance and vertical working time, built)
+- Built and reviewed, uncommitted on phases-8-10: see CHANGELOG and [ADR-0015](../03-architecture/decisions/ADR-0015.md). `npm test` 371/371, e2e 5/5, typecheck 0. Ledger with every ruling: `.superpowers/sdd/ADR-0015-IMPLEMENTATION-PLAN/progress.md` (git-ignored; kept, deletion needs the owner's OK).
+- Owner next: (1) on the dev server, set each vertical's GM and working time on Verticals (until then, non-Critical escalation uses the organization's Mon–Fri workday and each person's own zone); (2) look at Attendance as a GM and My attendance as staff; (3) accept or change the deferred minors (ledger `Final: minor`). Restart the dev API (it was stopped for low memory) so migration 019 runs.
+
+## 2026-11-12 (sign-in method on the Staff page)
+- Owner asked how Google users get a password: they don't need one. Staff page now tags Google users and hides "Send password reset" for them (CHANGELOG). Not chosen: Google-only enforcement (option 2), welcome email (option 3, would reverse D-126).
+
+## 2026-11-12 (KI-59 browser checks)
+- Done in server mode: warning banner, 360 px pages; fixed the missing On time / Late badge and the tall Schedule date picker (CHANGELOG). Left: GM Policies page, which needs a GM set on /admin/verticals (owner, changes reporting lines). Then US-01…07 can go DONE.
+
+## 2026-11-12 (ADR-0014 Task 14, plan complete)
+- All 14 plan tasks done, uncommitted on phases-8-10. `npm test` 336/336, e2e 4/4, typecheck 0. D-152 values entered on the dev DB (global v2), **not applied** to open tasks (owner). The earlier session's 4 failing final-review tests are fixed (CHANGELOG).
+- Open: browser checks KI-59 (GM Policies page in server mode, 360 px, warning banner, On time/Late badge); KI-61 differences for the owner to accept; KI-60 test data (delete only with OK); production needs the D-152 entry after go-live. Then the US-01…07 rows can go DONE.
+
+## 2026-11-12 (ADR-0014 Task 13, e2e)
+- Task 13 done: `e2e/escalation-v2.spec.ts`; `npm run e2e` 4/4 green. Fixed the server-mode client clock (countdown now follows server time). See CHANGELOG.
+- Left for ADR-0014: Task 14 (owner enters the D-152 values on /admin/policies, decides on "Apply to open tasks"; FRD/BR/TC/tracker/RTM/RELEASE_READINESS updates; full `npm test` + e2e). Plan checkboxes for Tasks 4–12 are tracked in the other session's ledger (`.superpowers/sdd/...`), not ticked in the plan.
+
+## 2026-11-12 (ADR-0014 Phase 1)
+- Tasks 1–3 done in code (CHANGELOG); `npm test` 308/308 green with the owner's OK. Task 3 Step 5 checked in the server-mode UI and dev DB: **Phase 1 done, no behaviour change.** Note: the client on 5173 runs the mock; server mode needs `VITE_BACKEND=server`, and task URLs there use the number (`/tasks/222`).
+- Another Claude session was busy on this repo at the same time; check the tree before editing shared files.
+
+## 2026-11-12 (ADR-0014 built, Phases 1–4)
+- **Done, uncommitted on phases-8-10:** ADR-0014 Tasks 1–12 (see CHANGELOG). Ledger with every ruling: `.superpowers/sdd/ADR-0014-IMPLEMENTATION-PLAN/progress.md` (git-ignored). `npm test` equivalent: api 178/178 + pure 154/154; typecheck 0.
+- **Owner to do:** (1) on `/admin/policies` as the CoS, enter the D-152 delays (Critical 30 min/2 h, High 4 h/24 h) and decide on "Apply to open tasks"; (2) run `npm run e2e`; (3) look at the Policies page as a GM in **server mode** (`VITE_BACKEND=server`), never browser-checked; (4) delete test data if wanted: dev DB tasks 230, 231 ("Countdown check: …") and mock-store tasks for Sam/Nina.
+- **Not done:** e2e spec (Task 13); FRD/BUSINESS_RULES/TEST_CASE_INVENTORY/tracker/RTM updates beyond ADR-0014 and the ESCALATION-FRD pointer.
+
+## 2026-11-12 (escalation redesign proposal, ADR-0014)
+- **Later:** the owner accepted every recommendation, so **ADR-0014 is Accepted**. Plan: `docs/06-planning-and-tracking/ADR-0014-IMPLEMENTATION-PLAN.md`. Next: Task 1 (shared policy) once the owner picks the execution mode and OKs api test runs.
+- **ADR-0014 Proposed, waiting for approval:** scheduled start/due windows, a 10-min countdown, deadline escalation with per-priority, per-vertical L2/L3 delays, GM-edited vertical policies, a reviewer SLA. Decisions D-140…D-152 are in OPEN_QUESTIONS §14. **No code, schema or policy changed.** D-140/D-152 also need the Founder's Office (WO-D3, AC-2).
+- The demo seed now fills the leaderboard (CHANGELOG). The dev DB was reset with owner approval.
+
+## 2026-11-12 (ADR-0013 approved)
+- ADR-0013 real-time updates (SSE + LISTEN/NOTIFY) **approved by the owner, not built**: implement later, when the owner says so. The owner has questions first.
+- D-139 department labels "Sales · CODE" + Team→Department wording (CHANGELOG). Owner: `npm test` (1 new API test) and a browser look at the filters.
+
+## 2026-11-11 (browser push, ADR-0012)
+- **Later the same day:** web-push 4 import fixes, D-135 domain-pattern fix, D-136 single names, @mention whole-name matching, D-137 multi-department leads (ADR-0011 amendment). Agent `npm test` (owner-approved) **271/271 green**. Not done: `npm run e2e` (last green before sign-in v2, D-133, push), browser check of the Verticals lead picker / push switch / Settings domains / Staff row menu. Uncommitted.
+- **End of day, all uncommitted on phases-8-10** (090ceeb login credit committed locally, not pushed). Also done: sign-in error banner red; D-135 Google sign-in domains in Settings (CoS); Popover fixed-position fix (row menus no longer clipped). Local .env: VAPID keys, SESSION_SECRET, GOOGLE_ALLOWED_DOMAINS set (values never in docs).
+- **Next session:** (1) owner OK to run `npm test` (2 new tests: Web Push, D-135); (2) start API server and browser-check the Staff row menu, push switch and Settings domains; (3) owner's production URL for the Google OAuth origins/redirect; (4) open asks: confirm dialog for "Send password reset"?, remove SEED_COS_EMAIL?, push 090ceeb?, delete login-illustration.jpg?, e2e re-run.
+- Built D-134 Web Push (CHANGELOG). Not committed. To go live: `npx web-push generate-vapid-keys` once, put both keys in the server env (never change them), HTTPS. Owner to run `npm test` (1 new test) and try it on a phone.
+
 ## 2026-11-07 (commit + whole-codebase review; highs fixed)
 - Owner: "commit and review the whole code base", then "fix highs". Committed `7ad7d98` on new branch `phases-8-10` (not pushed; `server/smoke-reports.mts` left out). The H1–H5 fixes are **uncommitted** on top.
 - Fixed KI-51…55 (see KNOWN_ISSUES). Open review findings: KI-56; owner said "then we will see". Open question for the owner: one meaning of on-time for D-50 (completion vs submission).

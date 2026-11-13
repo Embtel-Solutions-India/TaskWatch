@@ -4,6 +4,24 @@ import { promisify } from 'node:util';
 import { pool } from '../db/pool.js';
 import { z } from 'zod';
 import { HttpError } from '../http/errors.js';
+import { config } from '../config.js';
+
+/** D-101: the organization's Google domains, else GOOGLE_ALLOWED_DOMAINS. Empty = any verified Google account. */
+export function googleDomains(orgDomains: readonly string[] | null | undefined): readonly string[] {
+  return orgDomains?.length ? orgDomains : config.google.allowedDomains;
+}
+
+/**
+ * How a person signs in, for the Staff page. On an allowed Google domain (Google sign-in on): 'google' when they have
+ * no password (they never need one), 'both' when a password is already set (it keeps working and can be reset).
+ * Otherwise 'password'. With no domain list Google is open to anyone, so nobody is marked Google.
+ */
+export function signInMethod(email: string, orgDomains: readonly string[] | null | undefined, hasPassword: boolean): 'google' | 'both' | 'password' {
+  const allowed = googleDomains(orgDomains);
+  const domain = email.split('@')[1]?.toLowerCase() ?? '';
+  if (!(config.google.enabled && allowed.length > 0 && allowed.includes(domain))) return 'password';
+  return hasPassword ? 'both' : 'google';
+}
 
 /** AUTH-04: the password rule, shared by password reset and the production bootstrap. */
 export const passwordRule = z

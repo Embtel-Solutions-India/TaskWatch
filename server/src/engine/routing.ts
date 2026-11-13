@@ -2,11 +2,16 @@ import type { RulesConfig } from '../domain.js';
 import type { Directory, DirUser } from '../services/directory.js';
 import { hasRole } from '../services/directory.js';
 
-/** The assignee's team lead: the nearest lead above them, below any manager or the Founder's Office. */
-export function findLead(dir: Directory, assigneeId: number): DirUser | null {
+const NONE: ReadonlySet<number> = new Set();
+
+/**
+ * The assignee's team lead: the nearest lead above them, below any manager or the Founder's Office. A lead in `away`
+ * (marked absent or on leave now) is passed over like an inactive one, so L1 goes straight to the manager.
+ */
+export function findLead(dir: Directory, assigneeId: number, away: ReadonlySet<number> = NONE): DirUser | null {
   for (const a of dir.ancestors(assigneeId)) {
     if (hasRole(a, 'lead')) {
-      if (a.active) return a;
+      if (a.active && !away.has(a.id)) return a;
       continue;
     }
     if (hasRole(a, 'manager', 'cos', 'ceo')) return null;
@@ -15,10 +20,10 @@ export function findLead(dir: Directory, assigneeId: number): DirUser | null {
 }
 
 /** The assignee's manager: the nearest manager above them, below the Founder's Office. */
-export function findManager(dir: Directory, assigneeId: number): DirUser | null {
+export function findManager(dir: Directory, assigneeId: number, away: ReadonlySet<number> = NONE): DirUser | null {
   for (const a of dir.ancestors(assigneeId)) {
     if (hasRole(a, 'manager')) {
-      if (a.active) return a;
+      if (a.active && !away.has(a.id)) return a;
       continue;
     }
     if (hasRole(a, 'cos', 'ceo')) return null;
@@ -48,12 +53,13 @@ export interface Route {
 
 /**
  * Who an escalation at a given level reaches. A level with no one in the role escalates
- * straight to the next existing level (work order: "Users, roles and visibility").
+ * straight to the next existing level (work order: "Users, roles and visibility"); so does a level whose holder is
+ * marked away now (`away`, from worktime `awayNow`).
  */
-export function routeEscalation(dir: Directory, assigneeId: number, level: number, cfg: RulesConfig): Route {
+export function routeEscalation(dir: Directory, assigneeId: number, level: number, cfg: RulesConfig, away: ReadonlySet<number> = NONE): Route {
   const assignee = dir.must(assigneeId);
-  const lead = findLead(dir, assigneeId);
-  const manager = findManager(dir, assigneeId);
+  const lead = findLead(dir, assigneeId, away);
+  const manager = findManager(dir, assigneeId, away);
   const fo = founderOffice(dir, cfg);
 
   let to: DirUser[] = [];

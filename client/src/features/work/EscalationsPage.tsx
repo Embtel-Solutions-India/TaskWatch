@@ -1,3 +1,4 @@
+import { labelDepartments } from '@taskwatch/shared/permissions';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { LEVEL_LABEL, PRIORITY_LABEL, PRIORITY_ORDER } from '../../constants';
@@ -38,7 +39,9 @@ export function EscalationsPage() {
     [rows, status, priority, team, assignee, level],
   );
   const open = rows.filter((r) => r.status !== 'resolved');
-  const teams = [...new Map(rows.flatMap((r) => (r.task.team ? [[r.task.team.id, r.task.team.name] as const] : []))).entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  const teams = labelDepartments([...new Map(rows.flatMap((r) => (r.task.team ? [[r.task.team.id, r.task.team] as const] : []))).values()], (t) => t.departmentId)
+    .map((t) => [t.id, t.name] as const)
+    .sort((a, b) => a[1].localeCompare(b[1]));
 
   if (q.error) return <ErrorState error={q.error} />;
   return (
@@ -104,8 +107,8 @@ export function EscalationsPage() {
                 </option>
               ))}
             </Select>
-            <Select aria-label="Team" value={team} onChange={(e) => setTeam(e.target.value)}>
-              <option value="">Any team</option>
+            <Select aria-label="Department" value={team} onChange={(e) => setTeam(e.target.value)}>
+              <option value="">Any department</option>
               {teams.map(([id, n]) => (
                 <option key={id} value={id}>
                   {n}
@@ -131,7 +134,13 @@ export function EscalationsPage() {
           { id: 'overdue', header: 'Time overdue', cell: (r) => (r.task.overdue ? <span className="tone-danger">{hoursLabel(r.task.levelInfo?.overdueHours ?? 0)}</span> : <span className="muted">Not overdue</span>), sort: (r) => r.task.levelInfo?.overdueHours ?? 0 },
           { id: 'update', header: 'Last update', cell: (r) => relative(r.task.lastUpdateAt), sort: (r) => r.task.lastUpdateAt },
           { id: 'next', header: 'Next escalation', cell: (r) => (r.status === 'resolved' ? '—' : r.nextLevel ? <span title={formatShort(r.nextLevel.at)}>L{r.nextLevel.level} {relative(r.nextLevel.at)}</span> : <span className="muted">Top level</span>), sort: (r) => r.nextLevel?.at ?? 'z' },
-          { id: 'recipient', header: 'Recipient', cell: (r) => r.recipients.join(', '), sort: (r) => r.recipients.join() },
+          { id: 'recipient', header: 'Recipient', cell: (r) => (
+            // One line: first recipient + count; the full list is in the tooltip (and the CSV).
+            <span className="nowrap" title={r.recipients.join(', ')}>
+              {r.recipients[0] ?? '—'}
+              {r.recipients.length > 1 && <span className="muted"> +{r.recipients.length - 1}</span>}
+            </span>
+          ), sort: (r) => r.recipients.join() },
           { id: 'status', header: 'Status', cell: (r) => <Tag tone={r.status === 'active' ? 'danger' : r.status === 'acknowledged' ? 'warn' : 'ok'}>{r.status === 'active' ? 'Active' : r.status === 'acknowledged' ? 'Acknowledged' : 'Resolved'}</Tag>, sort: (r) => r.status },
           {
             id: 'actions',

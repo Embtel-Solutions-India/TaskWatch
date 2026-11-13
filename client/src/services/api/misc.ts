@@ -404,7 +404,7 @@ export async function getTeamOverview(): Promise<TeamOverview> {
       user.id,
       people.map((u) => ({ id: u.id, name: u.name, title: u.title, active: u.status === 'active', roles: [u.role], teamId: u.teamId, managerId: u.managerId })),
       tasks,
-      db.teams,
+      db.teams.map((t) => ({ id: t.id, name: t.name, entityId: t.departmentId })),
       nameOf(db),
     );
   });

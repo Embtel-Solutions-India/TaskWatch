@@ -20,6 +20,11 @@
 | [ADR-0008](ADR-0008.md) | Standalone delivery, not a StatCommand module | Accepted | 2026-11-03 | D-22, WO-D1 |
 | [ADR-0009](ADR-0009.md) | v1 list pagination stays client-side over capped, scoped results | **Accepted** | 2026-11-04 | D-10 |
 | [ADR-0010](ADR-0010.md) | Multiple organizations in one database | **Accepted** | 2026-11-04 | D-95…D-97, D-100…D-104 |
+| [ADR-0011](ADR-0011.md) | Verticals, departments and automatic reporting lines | **Accepted** | 2026-11-11 | D-129…D-132 |
+| [ADR-0012](ADR-0012.md) | Browser (Web Push) notifications | **Accepted** | 2026-11-11 | D-134 |
+| [ADR-0013](ADR-0013.md) | Real-time screen updates (Server-Sent Events) | **Accepted** (not built) | 2026-11-12 | D-138 |
+| [ADR-0014](ADR-0014.md) | Scheduled tasks, deadline-based escalation and vertical escalation policies | **Accepted** (not built) | 2026-11-12 | D-140…D-153 |
+| [ADR-0015](ADR-0015.md) | Attendance, vertical working time, and GM-run verticals | **Accepted** (built, uncommitted) | 2026-11-13 | D-156…D-165 |
 
 ## Proposals that live outside the ADR list
 These are written in the architecture docs and are marked **Proposed — needs approval** where they appear. None is accepted yet.

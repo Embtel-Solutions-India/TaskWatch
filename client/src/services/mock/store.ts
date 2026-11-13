@@ -2,6 +2,8 @@
 import type { Db } from '../../types';
 import { runTicks } from '../core';
 import { createSeed, DB_VERSION } from './seed';
+import { resolvePolicy } from '@taskwatch/shared/policy';
+import { DEFAULT_RULES } from '../../constants';
 
 const DB_KEY = 'taskwatch.prototype.db';
 const SESSION_KEY = 'taskwatch.prototype.session';
@@ -27,7 +29,8 @@ function load(): Db {
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as Db;
-      if (parsed.version === DB_VERSION) return parsed;
+      // ADR-0014: a store saved before new rule fields existed gets them from the defaults, without a reseed.
+      if (parsed.version === DB_VERSION) return { ...parsed, rules: resolvePolicy(DEFAULT_RULES, parsed.rules) };
     } catch {
       /* corrupt: reseed */
     }
@@ -57,8 +60,15 @@ export function commit(): void {
   listeners.forEach((l) => l());
 }
 
+/** Server mode: server time minus browser time at the last /api/me, so countdowns follow the engine's clock (incl. the dev clock). */
+let serverSkewMs = 0;
+export function setServerTime(iso: string): void {
+  const t = Date.parse(iso);
+  if (Number.isFinite(t)) serverSkewMs = t - Date.now();
+}
+
 export function now(): number {
-  return Date.now() + db.clockOffsetMs;
+  return Date.now() + db.clockOffsetMs + serverSkewMs;
 }
 
 export function tick(): void {

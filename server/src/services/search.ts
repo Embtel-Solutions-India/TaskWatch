@@ -1,6 +1,6 @@
 // SRCH-01: one search over tasks, people and teams, limited to what the caller may see. Names and titles only:
 // email is matched but never returned (SEC-9).
-import { canViewUser } from '@taskwatch/shared/permissions';
+import { canViewUser, labelDepartments } from '@taskwatch/shared/permissions';
 import { pool } from '../db/pool.js';
 import { taskStage } from '../domain.js';
 import { can, visibilityFilter } from './access.js';
@@ -51,10 +51,10 @@ export async function search(viewer: DirUser, dir: Directory, raw: string) {
   if (supervises) {
     const teamIds = [...new Set(visiblePeople.map((u) => u.teamId).filter((t): t is number => t !== null))];
     const res = await pool.query(
-      `select id, name from teams where organization_id = $1 and id = any($2) and name ilike $3 order by name limit 6`,
+      `select id, name, entity_id from teams where organization_id = $1 and id = any($2) and name ilike $3 order by name limit 6`,
       [viewer.organizationId, teamIds, `%${escaped}%`],
     );
-    teams = res.rows;
+    teams = labelDepartments(res.rows as { id: number; name: string; entity_id: string }[], (t) => t.entity_id).map((t) => ({ id: t.id, name: t.name }));
   }
   return { tasks, people, teams };
 }

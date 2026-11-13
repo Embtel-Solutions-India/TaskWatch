@@ -20,6 +20,10 @@ export interface Bootstrap {
     reportCount: number;
   };
   permissions: Permission[];
+  /** ADR-0014 / D-141: the verticals this person heads; a general manager edits their escalation policy. */
+  headOf?: string[];
+  /** ADR-0015: this person has attendance (a My attendance calendar); GMs, the CoS and the CEO do not. */
+  hasAttendance?: boolean;
   settings: { orgName: string; timezone: string; categories: string[]; sessionTimeoutMinutes: number; workdayStart: string; workdayEnd: string };
   badges: { unread: number; escalations: number; reviews: number; extensions: number };
   integrations: { google: boolean; whatsapp: boolean; email: boolean; devLogin: boolean };

@@ -4,7 +4,9 @@
 >
 > **Task view (`TaskView`)** returned by list and detail: the task fields plus `level`, `levelInfo`, `stage`, `assignee`, `giver`, `team`, `entity`, `overdue`, `lastUpdateAt`, `escalationAcked` [V-C `services/api/base.ts:57-83`]. `stage` and `entity` are added (TASK-10, D-4). People are returned as `{id, name, title}` only (SEC-9).
 
-Features: TASK-01 … TASK-08 · **TASK-09 (new, from WO)** · **TASK-10 (new, from WO)**
+Features: TASK-01 … TASK-08 · **TASK-09 (new, from WO)** · **TASK-10 (new, from WO)** · **TASK-11 (new, ADR-0014)**
+
+> **2026-11-12: [ADR-0014](../../03-architecture/decisions/ADR-0014.md) built (uncommitted).** TASK-01 gains a scheduled start time, submission requirements, a reviewer choice, several assignees and soft warnings (see "ADR-0014 additions" in TASK-01). TASK-11 is the Schedule page. Escalation timing from the due time is in [ESCALATION-FRD](ESCALATION-FRD.md) ESC-02, ESC-10, ESC-11.
 
 ---
 
@@ -20,7 +22,7 @@ Features: TASK-01 … TASK-08 · **TASK-09 (new, from WO)** · **TASK-10 (new, f
 - Server-generated id `TW-<n>`.
 - Status `assigned` (shown as Open).
 - `clockStartedAt` = `createdAt` = now.
-- The reviewer is the creator.
+- The reviewer is the creator, unless another reviewer is chosen (ADR-0014 additions below).
 - Activity rows `created` and `assigned`, plus an assignment record.
 - A mandatory `assignment` notification to the assignee on in-app, email and WhatsApp (`taskwatch_task_assigned`, with the due time in the assignee's zone).
 - Audit `task.created`.
@@ -73,7 +75,7 @@ Adapt `POST /tasks` (`routes/tasks.ts:48-62`), which takes `{title 3–200, enti
 | dueDate | required | `Set a due date.` |
 | dueDate | parses | `Enter a valid date.` |
 | dueDate | due moment > now (default time 17:00) | `The due time must be in the future.` |
-| startDate | ≤ dueDate | `Start date must be on or before the due date.` |
+| startDate | ≤ dueDate | `Start date must be on or before the due date.` **Superseded 2026-11-12 (ADR-0014):** start (date + time) < due → `startDate`: `The scheduled start must be before the due time.` |
 | parentId | visible to the actor | `Pick a parent task you can see.` |
 | files | each ≤ 25 MB **[D-13, decided]** | `<name> is larger than 25 MB.` |
 | any text | sensitive-ID guard | BR-80 message |
@@ -114,6 +116,15 @@ The server's title limits (3–200) differ. **Decided (D-34): 4–140** (the UI'
 - Sensitive-ID patterns.
 - WhatsApp opt-in vs no number.
 - 26 MB file.
+
+**ADR-0014 additions (built 2026-11-12, uncommitted; D-144, D-151, D-153; US-01).**
+- **Scheduled start:** `startDate` + `startTime` (HH:MM, default 00:00 when only a date is sent; the form defaults to 09:00), read in the giver's zone. The form shows "Expected duration" = due − start. Starting earlier or later never moves the due time. An Open task whose start is still ahead shows a "Scheduled" tag (label only, no new status).
+- **Submission requirements:** `submissionRequirements`, ≤ 2000 characters, sensitive-ID guard; stored in `tasks.submission_requirements` (migration 018), shown on the task page as "Hand in", editable.
+- **Reviewer:** `reviewerId`, used only with `reviewRequired`; default the creator. 422 `reviewerId`: `The assignee cannot review their own work.` or `Choose someone who can review tasks.` (must be active and hold `review_tasks`). The form lists "You" and the non-staff people of the giver's assignee options.
+- **Several assignees:** `assigneeIds` (1–20, each once; not together with `assigneeId`) creates one task per person in one transaction, all or none → 201 `{tasks: TaskView[]}`. 422 `assigneeIds`: `Choose at most 20 people.`, `Choose each person once.`, `Choose one person or several, not both.`. The form's "Also assign to" list appears on new, non-recurring tasks.
+- **Soft warnings (D-151), never a block:** the due time is outside the assignee's working hours (organization workday, in the assignee's zone), or the window overlaps the assignee's other tasks that day. The due time is never shifted.
+- Each task gets its own deadline milestones (ESC-02).
+- Tests: `api.test.ts` "ADR-0014 scheduling fields: start time, requirements, reviewer, several assignees"; `schedule.test.ts` "schedule helpers".
 
 ---
 
@@ -548,6 +559,35 @@ Open views sort by level descending, then due ascending [V-S `services/queries.t
 
 ---
 
+## TASK-11 Schedule page (new, ADR-0014)
+
+**Description.** One day's scheduled work, for oneself or for one's reporting line. [US-01, US-04; ADR-0014 §14; built 2026-11-12, uncommitted]
+
+**Roles.** Everyone (own day). A person with reports also gets "My team".
+
+**User actions (UI).** `/schedule` ("Schedule", server mode; `features/schedule/SchedulePage.tsx`). A date picker and "My day" / "My team".
+- My day: tasks grouped Overdue / Active / Upcoming / Completed (submitted counts as completed for the assignee).
+- My team: one row per person, the day as a timeline; blocks from start to due, priority colour, overlaps outlined, late ones red.
+
+**Behaviour.**
+- A task belongs to a day when its window [start, due) intersects that day in the person's own zone; a task without a start counts as its last hour.
+- Overlaps are flagged among each person's tasks that are not completed (`overlaps`, `shared/schedule.ts`).
+- Drafts, cancelled and discarded tasks are left out.
+
+**API.** `GET /api/schedule?date=YYYY-MM-DD[&userId=N | &team=1]` → 200 `{date, people: [{userId, name, timeZone, tasks: [{id, title, priority, status, startAt, dueAt, submittedAt, overlap}]}]}`.
+
+**Validation.** Missing or bad `date` → 422 `date`: `Choose a date.`
+
+**Authorization.** Oneself; anyone below in the reporting line; anyone with `view_org_reports`. Anyone else → 404 `Person not found.` `team=1` = every active person below the viewer.
+
+**Acceptance criteria.**
+- TASK-11-AC-1: A person sees their own day; a lead sees a person in their line; a person outside the scope → 404.
+- TASK-11-AC-2: A lead's team view lists everyone in their line, with overlaps flagged.
+
+**Tests.** `api.test.ts` "ADR-0014 schedule (US-01, US-04)"; `schedule.test.ts` "schedule helpers".
+
+---
+
 ## Decision points (all decided 2026-11-04)
 
 > Each D-number below is decided. The value is in the [Decision Register](../../01-discovery/OPEN_QUESTIONS.md); where a value changes behaviour, the sections above already state it. R-1 and R-2 from the [readiness review](../../06-planning-and-tracking/READINESS_REVIEW.md) were decided on 2026-11-04 (Decision Register §10.1).
@@ -560,3 +600,4 @@ Open views sort by level descending, then due ascending [V-S `services/queries.t
 - **D-32 (decided)**: self-assignment and "their staff" (TASK-08).
 - **D-34 (decided)**: canonical text limits (title 4–140 in the client vs 3–200 on the server; instructions unbounded vs ≤ 5000).
 - **D-35 (decided)**: 403 vs 404 for an invisible task.
+- **D-144, D-151, D-153 (decided 2026-11-12, ADR-0014)**: start time and start notice; soft warnings, due never shifted; several assignees = one task each (TASK-01 additions, TASK-11).

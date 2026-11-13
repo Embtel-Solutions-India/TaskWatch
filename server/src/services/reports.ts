@@ -1,4 +1,4 @@
-import { ROLE_LABEL, ROLES } from '@taskwatch/shared/permissions';
+import { labelDepartments, ROLE_LABEL, ROLES } from '@taskwatch/shared/permissions';
 import { buildReport, type ReportFilters } from '@taskwatch/shared/reports';
 import * as clock from '../clock.js';
 import { HOUR } from '../clock.js';
@@ -18,21 +18,29 @@ export function reportScope(viewer: DirUser, dir: Directory): ReportScope {
   throw forbidden('You do not have access to reports.');
 }
 
-const teamsOf = (organizationId: number) =>
-  pool.query<{ id: number; name: string; entity_id: string }>('select id, name, entity_id from teams where organization_id = $1 and archived_at is null order by name', [organizationId]);
+/**
+ * The organization's departments, each named for the viewer's report scope ("Sales · BAIS" when the scope spans
+ * verticals), and the ids inside that scope.
+ */
+async function teamsOf(viewer: DirUser, dir: Directory, scope: ReportScope) {
+  const { rows } = await pool.query<{ id: number; name: string; entity_id: string }>('select id, name, entity_id from teams where organization_id = $1 and archived_at is null order by name', [viewer.organizationId]);
+  const line = dir.descendants(viewer.id);
+  const inScope = new Set(dir.all().filter((u) => u.active && (scope === 'org' || line.has(u.id))).map((u) => u.teamId));
+  const named = new Map(labelDepartments(rows.filter((t) => scope === 'org' || inScope.has(t.id)), (t) => t.entity_id).map((t) => [t.id, t.name]));
+  return { all: rows.map((t) => ({ ...t, name: named.get(t.id) ?? t.name })), visible: new Set(named.keys()) };
+}
 
 /** RPT-04: filter options inside the report scope. Names and ids only (SEC-9). */
 export async function reportOptions(viewer: DirUser, dir: Directory) {
   const scope = reportScope(viewer, dir);
   const line = dir.descendants(viewer.id);
   const people = dir.all().filter((u) => u.active && (scope === 'org' || line.has(u.id)));
-  const { rows } = await teamsOf(viewer.organizationId);
-  const teamIds = new Set(people.map((u) => u.teamId));
+  const teams = await teamsOf(viewer, dir, scope);
   const givers = scope === 'org' ? people : [viewer, ...people];
   const brief = (u: DirUser) => ({ id: u.id, name: u.name });
   return {
     scope,
-    teams: rows.filter((t) => scope === 'org' || teamIds.has(t.id)).map((t) => ({ id: t.id, name: t.name, entityId: t.entity_id })),
+    teams: teams.all.filter((t) => teams.visible.has(t.id)).map((t) => ({ id: t.id, name: t.name, entityId: t.entity_id })),
     people: people.map(brief),
     givers: givers.filter((u) => u.roles.some((r) => r !== 'staff')).map(brief),
   };
@@ -41,8 +49,8 @@ export async function reportOptions(viewer: DirUser, dir: Directory) {
 /** RPT-02: the nine-report payload over the RPT-01 scope (D-51: team scope = what the viewer may see). */
 export async function report(viewer: DirUser, dir: Directory, f: ReportFilters) {
   const scope = reportScope(viewer, dir);
-  const { rows: teams } = await teamsOf(viewer.organizationId);
-  if (f.teamId && !teams.some((t) => String(t.id) === f.teamId)) throw invalid({ teamId: 'Choose a team from the list.' });
+  const teams = (await teamsOf(viewer, dir, scope)).all;
+  if (f.teamId && !teams.some((t) => String(t.id) === f.teamId)) throw invalid({ teamId: 'Choose a department from the list.' });
   if (f.userId && !dir.get(Number(f.userId))) throw invalid({ userId: 'Choose a person from the list.' });
   if (f.giverId && !dir.get(Number(f.giverId))) throw invalid({ giverId: 'Choose a person from the list.' });
 
@@ -184,7 +192,7 @@ export async function accountability(viewer: DirUser, dir: Directory, days: numb
        (select count(*) from tasks t where t.assignee_id = u.id and ${openSql('t')}) as open,
        (select avg(extract(epoch from (s.first_update_at - s.assigned_at)) / 3600)
           from assignments s where s.assignee_id = u.id and s.assigned_at >= $2 and s.first_update_at is not null) as avg_first_h,
-       (select count(*) from escalations e where e.assignee_id = u.id and e.level >= 1 and e.fired_at >= $2) as escalations,
+       (select count(*) from escalations e where e.assignee_id = u.id and e.level >= 1 and e.fired_at >= $2 and e.accountable = 'assignee') as escalations, -- D-145
        (select count(*) from tasks t where t.assignee_id = u.id and t.status = 'completed' and t.closed_at >= $2) as closed,
        (select count(*) from tasks t where t.assignee_id = u.id and t.status = 'completed' and t.closed_at >= $2 and t.closed_at <= t.due_at) as on_time
      from users u where u.id = any($1)
