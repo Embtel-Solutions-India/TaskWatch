@@ -358,6 +358,16 @@ Notification types (13 today, [V-C `types/index.ts:225-238`]): `assignment`, `re
 
 ---
 
+## NTF-09 Browser (Web Push) notifications (new, D-134, ADR-0012)
+
+- **Who:** every signed-in person, for their own browsers only.
+- **Enable:** Account settings → Notification preferences → "Browser notifications on this device". The browser asks permission; the device is registered (`POST /api/push/subscribe`). "Send a test" (`POST /api/push/test`) checks it.
+- **What:** every type that reaches the bell, filtered by the Browser column (all on by default; mandatory types always on). Same quiet hours as email.
+- **Click:** opens the linked task (or /notifications) in an open TaskWatch window, else a new one.
+- **States shown:** unsupported browser; iPhone/iPad not added to the Home Screen; not configured on the server (no VAPID keys); blocked by the browser; off; on.
+- **Off:** the switch, signing out from the menu, or the push service reporting the browser gone (404/410) revokes it.
+- **AC-1** a person with an enabled browser gets a push row for each bell notification their preferences allow; others get none. **AC-2** nobody can revoke another person's browser. **AC-3** a gone browser is revoked and not retried. **AC-4** no keys → simulated. (API test "ADR-0012: Web Push".)
+
 ## DLV-01 Delivery log
 
 **Description.** Every outbound email and WhatsApp message with status, rendered preview, template, and counts; plus "Send weekly digest now" (NTF-05). [V-C `features/admin/DeliveryLogPage.tsx:102-215`]

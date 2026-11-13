@@ -95,6 +95,14 @@
 
 **Built 2026-11-05 (T-5.7, T-5.8, T-5.9).** Writes need `manage_escalation_policies`; validation answers under the keys above (`w_<p>`, `multiples`, `offsets`, `ackSnoozeHours`, `dueSoonHours`, plus `repeatAfterWindows` 0–10); unknown fields 422; the note has the sensitive-ID guard. Saving re-evaluates on the request: the whole organization for the default, that entity for an override. An override stores and applies only windows and multiples (D-48). `DELETE /api/rules/default` 409, unknown entity 422, delete answers 204. Policies page: entity selector, "Create override", "Reset to default". Not built: the history list on the page (the Audit page shows `rules_change`).
 
+**Changed 2026-11-12 ([ADR-0014](../../03-architecture/decisions/ADR-0014.md), built, uncommitted).**
+- New fields: `deadlineDelaysMinutes` (L2/L3 minutes after due, per priority; replaces the past-due offsets row, D-140), `reviewSlaMinutes` (per priority, D-145) and `extraRecipients` (`l1`/`l2`/`l3`, D-142). Shipped values in [ESC-02](ESCALATION-FRD.md#esc-02-past-due-floor-deadline-milestones) and [ESC-11](ESCALATION-FRD.md#esc-11-reviewer-deadline-and-review-accountability-new-adr-0014).
+- New 422 keys: `d_<p>` (L2 ≥ 5 min after due, L3 > L2, ≤ 30 days, whole minutes), `sla_<p>` (5 min–7 days, whole minutes), `rcpt_<level>` (≤ 10 people; active people of the vertical or the Founder's Office).
+- Saving no longer moves open tasks' L1/L2/L3 times (D-146); update windows still apply at once. "Apply to open tasks" is POL-04.
+- `sla_rules.version` +1 on every save; the `admin_log` `after` carries the version.
+- Policies page: deadline table (L1 "At due time", L2, L3, reviewer deadline per priority); the "Past-due floors" card and the past-due ladder row are removed; the 10-minute warning is shown as system-controlled.
+- POL-01-AC-2 still holds for windows; the deadline milestones follow D-146.
+
 **Description.** Edit update windows, level multiples, past-due offsets, acknowledgement snooze, due-soon notice, quiet hours and the D7 switch. Saving re-evaluates every open task. [V-C `admin.ts:222-248`; `AdminPages.tsx:137-273`; WO "The Chief of Staff can change windows and multiples … without code changes; every change is logged."]
 
 **Roles.** Read: any signed-in user ("Everyone can read the rules that govern their work"). [V-S `routes/rules.ts:12-21`; V-C `admin.ts:222-224` has no check] Write: `manage_escalation_policies`. [V-C `admin.ts:228`]
@@ -177,6 +185,8 @@
 
 ## POL-03 Per-entity SLA overrides (new, from WO)
 
+> **2026-11-12: superseded in part by POL-04 ([ADR-0014](../../03-architecture/decisions/ADR-0014.md), D-142).** A vertical row is now sparse: it stores only the fields it changed, from `windowsHours`, `multiples`, `deadlineDelaysMinutes`, `reviewSlaMinutes` and `extraRecipients`; every other leaf is inherited from the global policy. The D-48 field scope below (windows and multiples only) and "Create override" are superseded. Existing windows/multiples rows are valid sparse rows (no data migration).
+
 **Description.** "The Chief of Staff can change windows and multiples **per entity** without code changes; every change is logged." The Policies page gets an entity selector. [WO; D-7 decided; V-S `services/rules.ts:30-39`, `routes/rules.ts:23-46`]
 
 **Roles.** As POL-01.
@@ -215,6 +225,57 @@
 4. POL-03-AC-4: Each override save and reset is logged with scope, before and after.
 
 **Test scenarios.** Override vs default per entity · partial override inheritance · reset · unknown entity · default delete · task changes entity on reassignment (D-4) and picks up the other entity's rules.
+
+---
+
+## POL-04 Vertical policy: GM editing, inheritance, versions, apply (new, ADR-0014)
+
+**Built 2026-11-12, uncommitted.** [ADR-0014 §6, §7, §15; D-141, D-142, D-146, D-150; US-02, US-03]
+
+**Roles.**
+- CoS (any holder of `manage_escalation_policies`): reads and edits the global policy and every vertical.
+- GM (the vertical's `entities.head_id`, archived verticals excluded): reads and edits their own vertical only. No new permission key (ADR-0011).
+- Everyone else: reads the global policy and their own vertical.
+
+**User actions (UI).** `/admin/policies` ("Escalation Policies"). The nav entry also shows for a GM in server mode (`bootstrap.headOf`).
+- CoS: "Policy for" picker (Global plus every vertical; "(customised)" marks verticals with a row). A GM has no picker and opens on their vertical.
+- In a vertical, each changed field shows a **Custom** tag; untagged fields show the global value (inherited). "Reset these to global" per section, "Reset to default" for the whole vertical.
+- Extra recipients per level (vertical scope only): a checkbox list of the vertical's people.
+- After a save: "Open tasks keep the schedule they were given" with **Apply to open tasks** (confirm dialog).
+- "Change history" card for a vertical: version, who, when, note.
+- Org-wide settings (quiet hours, acknowledgement, due-soon, CEO on L3) show on Global only; a vertical's banner says they are organization-wide.
+
+**Expected behaviour.**
+- Effective policy = code defaults ⊕ global row ⊕ vertical row, leaf by leaf (`resolvePolicy`, `shared/policy.ts`). A later global change shows through every leaf a vertical did not set and never overwrites a custom one.
+- The page saves `diffPolicy(effective, global)`: a value equal to the global one is not stored, so it stays inherited.
+- Org-wide fields in a vertical body → 422 (strict schema).
+- Every save bumps `sla_rules.version` and writes `admin_log` `rules_change` (actor, before, after with version, note). A task stores `policy_version` (e.g. `default@3,BAIS@2`).
+- **Apply to open tasks** re-stamps the milestones of every open task in the scope (every open task for Global) from the policy as it stands, re-runs the engine, and writes `admin_log` `rules_applied` `{scope, version, updated}`.
+
+**API.**
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | `/api/rules` | — | `{defaults, overrides (effective per visible vertical), stored (sparse rows), versions, headOf, history}` |
+| GET | `/api/rules/history?scope=` | — | `{items}`: newest first, 50 rows, filtered to readable scopes |
+| PUT | `/api/rules/:scope` | `{config, note?}`; vertical `config` is the sparse override | `200 {ok:true}` |
+| DELETE | `/api/rules/:scope` | — | `204`; the vertical follows the global policy again |
+| POST | `/api/rules/:scope/apply` | — | `200 {updated}` |
+
+**Validation.** As POL-01 (checked on the effective policy, so keys are the same in both scopes); extra recipients per POL-01.
+
+**Authorization.** GM on another vertical → 404 "Vertical not found." (same answer whether it exists or not, D-150); GM on Global → 403; no right at all → 403 for Global, 404 for a vertical. CoS on an unknown entity → 422 "Unknown entity". A non-admin asking for history of a vertical they cannot read → 404.
+
+**Acceptance criteria.**
+1. POL-04-AC-1: A vertical row holds only what it changed; a later global change shows through the rest.
+2. POL-04-AC-2: The GM edits their own vertical (200, versioned, audited under their name); another vertical 404; Global 403; an org-wide field 422.
+3. POL-04-AC-3: The CoS overrides the GM's value; the history shows both; the GM sees only their vertical's and the global history.
+4. POL-04-AC-4: A policy change leaves open tasks' milestones unchanged; apply re-stamps them and is audited.
+5. POL-04-AC-5: An extra L2 recipient is copied on L2; one outside the vertical and the Founder's Office → 422 `rcpt_l2`.
+
+**Tests.** `api.test.ts` "ADR-0014 vertical policies: …" and "ADR-0014 apply to open tasks and extra recipients"; `rules.test.ts` "ADR-0014 policy …", "ADR-0014 diffPolicy …"; `e2e/escalation-v2.spec.ts` (GM sets Critical L2 and applies).
+
+**Not done / differences from ADR-0014 §15** (see [KNOWN_ISSUES](../../07-project-memory/KNOWN_ISSUES.md)): no before-save diff dialog and no note field on the page (the API accepts `note`); the recipients picker lists the vertical's people only, not the Founder's Office (the API accepts both); the page as a GM was not checked by hand in server mode (the e2e spec covers the GM save and apply).
 
 ---
 
@@ -381,4 +442,9 @@ The mock validates only the first three rows. [V-C `admin.ts:257-261`; FEATURE_G
 | [D-16](../../01-discovery/OPEN_QUESTIONS.md) | Manual chain-check button (AUD-02). |
 | WO-D2 / WO-D3 / WO-D4 / WO-D7 | Founder's Office confirmation of default windows, multiples/offsets, quiet hours and CEO L3. |
 | D-41 (decided) | Simulation toggles in production. |
-| D-48 (decided) | Policy field set, limits and per-entity field scope. |
+| D-48 (decided) | Policy field set, limits and per-entity field scope. Per-entity field scope superseded by D-142 (POL-04). |
+| D-140…D-142, D-146, D-150, D-152 (decided 2026-11-12) | ADR-0014: deadline delays, GM edits own vertical, sparse vertical fields, snapshot + apply, GM sees own vertical only, D-152 default values (POL-01, POL-04). |
+
+## Changed 2026-11-13 (ADR-0015)
+- **Working time per vertical.** Each vertical's time zone, quiet hours and working days and hours are set on Verticals by its GM or the CoS (STAFF-AND-ORG-FRD ORG-03). Policy quiet hours remain the organization default.
+- **GMs run their own vertical:** its staff, departments and attendance (STAFF-AND-ORG-FRD STAFF-06, ATT-01).

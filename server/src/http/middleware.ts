@@ -3,7 +3,7 @@ import { ZodError } from 'zod';
 import type { Role } from '../domain.js';
 import { config } from '../config.js';
 import { pool } from '../db/pool.js';
-import { getDirectory, hasRole, toDirUser, type Directory, type DirUser } from '../services/directory.js';
+import { getDirectory, hasRole, toDirUser, USER_SQL, type Directory, type DirUser } from '../services/directory.js';
 import { getSettings } from '../services/settings.js';
 import { effectivePermissions, getRoleMatrix } from '../services/permissions.js';
 import type { Permission } from '@taskwatch/shared/permissions';
@@ -56,7 +56,7 @@ export async function requireUser(req: Request, _res: Response, next: NextFuncti
   const id = req.session.userId;
   if (!id) throw new HttpError(401, 'Please sign in');
   const now = Date.now();
-  const { rows } = await pool.query('select * from users where id = $1', [id]);
+  const { rows } = await pool.query(`${USER_SQL} where u.id = $1`, [id]);
   if (!rows[0]?.active) {
     await endSession(req);
     throw new HttpError(401, 'Your account has been deactivated.');

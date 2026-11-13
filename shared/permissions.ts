@@ -164,3 +164,12 @@ export function reportsTo<Id>(
   if (lead === p.id) return other(gm) ?? senior;
   return other(lead) ?? other(gm) ?? senior;
 }
+
+/**
+ * ADR-0011: department names repeat across verticals ("Sales" in two). In a list that spans several verticals each one
+ * reads "Sales · BAIS"; a list inside one vertical keeps "Sales". Same shape back, only `name` changes.
+ */
+export function labelDepartments<T extends { name: string }>(list: readonly T[], verticalOf: (t: T) => string | null | undefined): T[] {
+  const many = new Set(list.map(verticalOf)).size > 1;
+  return list.map((t) => (many && verticalOf(t) ? { ...t, name: `${t.name} · ${verticalOf(t)}` } : t));
+}

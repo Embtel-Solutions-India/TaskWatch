@@ -1,5 +1,7 @@
 # FRD: Escalation Engine (ESC)
 
+> **2026-11-12: superseded in part by [ADR-0014](../../03-architecture/decisions/ADR-0014.md)** (built, uncommitted). The past-due offsets are now per-priority, per-vertical L2/L3 delays stored on each task as fixed times (ESC-02); a 10-minute warning and a start notice were added (ESC-07, ESC-10); the separate overdue notice is folded into L1, which copies the giver (ESC-04); a reviewer deadline R1/R2 was added (ESC-11); a Critical L1 is not held at night (D-147). Where this FRD and ADR-0014 differ, ADR-0014 wins.
+
 > Module index: [PRODUCT_REQUIREMENTS §2.6](../PRODUCT_REQUIREMENTS.md#26-escalation-engine-esc). The rules themselves are authoritative in [BUSINESS_RULES §2–6](../BUSINESS_RULES.md#2-silence-clock-resets) and are referenced here, not repeated. Tags: **[WO]** · **[V-C]** `client/src/…` · **[V-S]** `server/src/…` · **[A]** · **[OPEN D-n]**. All endpoints are **PROPOSED**. C-1..C-7 apply.
 >
 > **Reference implementations.**
@@ -10,7 +12,7 @@
 >
 > WO acceptance criteria covered here: **AC-1, AC-2, AC-5** (with NTF), **AC-7** (log rows).
 
-Features: ESC-01 … ESC-09 · **ESC-06a (new, from WO)**
+Features: ESC-01 … ESC-09 · **ESC-06a (new, from WO)** · **ESC-10, ESC-11 (new, ADR-0014)**
 
 **Built 2026-11-05 (T-5.1…T-5.3, Phase 5 Batch A).**
 - One ladder: `shared/levels.ts` `computeLevel` takes `blocked` (D-24: at least L1, reason `blocked`) and `silencePaused` (D-25: In review keeps only the past-due floor). The server reads a task row through `engine/levels.ts` `taskLevel`, used by both the engine and every TaskView; the engine evaluates `LADDER_STATUSES` (active + `submitted`).
@@ -74,9 +76,17 @@ The client keeps `recipientIds` and `ccIds` arrays [V-C `types/index.ts:206-223`
 
 ---
 
-## ESC-02 Past-due floor
+## ESC-02 Past-due floor (deadline milestones)
 
-**Description.** A past-due task is at least L1 at the due time, L2 at +24 h and L3 at +72 h, whatever updates are posted. [WO; BR-21]
+**Description.** A past-due task is at least L1 at the due time, L2 at its stored L2 time and L3 at its stored L3 time, whatever updates are posted. [WO; BR-21; ADR-0014 §4; D-140, D-146]
+
+**Changed 2026-11-12 (ADR-0014).** Stored **deadline milestones** replace the offsets:
+- L1 is always the due time. L2 = due + `deadlineDelaysMinutes[priority][0]` and L3 = due + `deadlineDelaysMinutes[priority][1]`, from the task's effective vertical policy (POL, [ADMINISTRATION-FRD](ADMINISTRATION-FRD.md)).
+- They are stored on the task (`deadline_l2_at`, `deadline_l3_at`, `policy_version`; migration 018) when it is assigned. They are re-stamped when the due time, priority, assignee, vertical or status (assigned, reopened) changes (`stampMilestones` / `restampIfMoved`, `services/tasks.ts`). A later policy change does not move them until "Apply to open tasks" is used (D-146).
+- Shipped delays are L2 +24 h and L3 +72 h for every priority (`SHIP_DEADLINE_DELAYS`, `shared/policy.ts`), so AC-2 reads as before until the D-152 values (Critical 30 min/2 h, High 4 h/24 h) are entered on the Policies page.
+- Progress never moves them (US-07). The task DTO carries `milestones` and `policyVersion`; the task page shows the L1/L2/L3 times.
+- A policy saved before ADR-0014 (offsets, no delays) keeps its offsets (`legacyDelays`).
+- The Behaviour, Data and Validation text below is the pre-ADR-0014 rule, kept for history.
 
 **Roles.** System.
 
@@ -99,9 +109,10 @@ The client keeps `recipientIds` and `ccIds` arrays [V-C `types/index.ts:206-223`
 **Dependencies.** EXT-02, EXT-04 (due moves), WF-03.
 
 **Acceptance criteria.**
-- ESC-02-AC-1 (AC-2): A task past due reaches L1 at the due time, L2 at +24 h and L3 at +72 h, even when the assignee posts an update every hour.
+- ESC-02-AC-1 (AC-2, per approved policy, D-140): A task past due reaches L1 at the due time and L2/L3 at its stored milestones (+24 h/+72 h with the shipped policy), even when the assignee posts an update every hour.
 - ESC-02-AC-2: Moving the due date into the future (EXT-02 or EXT-04) resolves the floor events in the same request.
 - ESC-02-AC-3: The event `reason` is `overdue` when the past-due level is at least the silence level.
+- ESC-02-AC-4 (D-146): A policy change leaves an open task's milestones unchanged; "Apply to open tasks" re-stamps them and is audited.
 
 **Test scenarios.**
 - Hourly updates on a past-due task.
@@ -185,6 +196,7 @@ The client keeps `recipientIds` and `ccIds` arrays [V-C `types/index.ts:206-223`
 - ESC-04-AC-3: With the lead inactive, L1 goes to the next active qualifying ancestor.
 - ESC-04-AC-4: With D7 off, L3 goes to C only.
 - ESC-04-AC-5: No user appears in both "to" and cc on the same event.
+- ESC-04-AC-6 (ADR-0014 §9, D-142): From L1 up, the giver and the vertical's extra recipients for that level are copied (active people only, never twice, never the assignee). While a task handed in on time awaits review, the reviewer is added as "to" (ESC-11).
 
 **Test scenarios.**
 - Full chain.
@@ -209,7 +221,7 @@ The client keeps `recipientIds` and `ccIds` arrays [V-C `types/index.ts:206-223`
 - If the top active event is not snoozed and now − `lastNotifiedAt` ≥ window × `repeatAfterWindows` (default 1), notify the "to" recipients and advance `lastNotifiedAt`.
 - The repeat is stamped at the whole-window boundary [V-C `services/core.ts:196-204`].
 - Copied people get no repeats.
-- Quiet hours apply to L0/L1 repeats (BR-53).
+- Quiet hours apply to L0/L1 repeats (BR-53), except a Critical L1 (D-147).
 
 **Data.** `events.lastNotifiedAt`, snooze.
 
@@ -339,6 +351,14 @@ The client keeps `recipientIds` and `ccIds` arrays [V-C `types/index.ts:206-223`
 
 **Description.** Informational notices around the due time. [BR-31]
 
+**Changed 2026-11-12 (ADR-0014 §9; D-143, D-144).** Built rule (`noticesDue`, `engine/engine.ts`); each notice is sent once per key in `job_runs`:
+- **Due-soon** (`due_soon`, key task@due): `dueSoonHours` before the due time, **only when the task was assigned before that moment** (long tasks).
+- **10-minute warning** (`deadline_warning`): see ESC-10.
+- **Start notice** (`start_notice`, key task@start): 10 minutes before a scheduled start, to the assignee, while the task is still Open and was assigned before that moment.
+- **No separate overdue notice.** L1 at the due time copies the assignee and the giver instead (ESC-04-AC-6). Stored `overdue` rows still read correctly.
+- The warning and the start notice follow the `due_soon` preference type.
+- The Roles and Behaviour text below is the pre-ADR-0014 rule.
+
 **Roles.**
 - Due-soon: the assignee.
 - Overdue: the assignee and the giver.
@@ -364,11 +384,63 @@ The client keeps `recipientIds` and `ccIds` arrays [V-C `types/index.ts:206-223`
 **Acceptance criteria.**
 - ESC-07-AC-1: Exactly one due-soon and one overdue notice per due date, even across many engine runs.
 - ESC-07-AC-2: After an extension, a new due-soon notice fires for the new date.
+- ESC-07-AC-3 (D-143): A task whose whole window is shorter than `dueSoonHours` gets no due-soon notice. The giver gets no separate overdue notice; L1 copies them. (ESC-07-AC-1's "one overdue notice" is superseded by this.)
 
 **Test scenarios.**
 - De-duplication.
 - Re-arm after a due change.
 - Task created inside the due-soon window.
+
+---
+
+## ESC-10 Pre-deadline warning and floating countdown (new, ADR-0014)
+
+**Description.** The assignee is warned 10 minutes before the due time and sees a live countdown. [US-05; D-143, D-149; ADR-0014 §4, §14]
+
+**Roles.** The assignee.
+
+**User actions (UI).**
+- The floating countdown (`features/shell/DeadlineTimer.tsx`, rendered by `Shell.tsx`), sticky at the top of the main column. One pill for the most urgent task and "+N more" for the others. A click opens the task. It collapses to a dot, except when overdue. It shows the time left, or the overdue time in the danger colour.
+- The task page shows the scheduled window, a live due countdown and the L1/L2/L3 times.
+
+**Behaviour.**
+- `deadline_warning` fires at due − 10 min (system constant `PRE_DEADLINE_WARNING_MINUTES`; nobody configures it), once per task and due time (`job_runs`), to the assignee.
+- It is skipped once the task is submitted, and when the task was assigned inside the 10 minutes. The assignment or reassignment notice then says "Due in N min".
+- Countdown rule (`nextCountdown`, `shared/schedule.ts`): my tasks in an active status that are within 10 minutes of the due time or past it. Overdue first (oldest due), then soonest due.
+- The client clock follows the server (offset recorded at every `/api/me`), not the browser clock alone.
+
+**Data.** Task `dueAt` and status; `job_runs`.
+
+**API.** None of its own.
+
+**Acceptance criteria.**
+- ESC-10-AC-1: One `deadline_warning` to the assignee at due − 10 min, however many engine runs.
+- ESC-10-AC-2: No warning for a submitted task, or for one assigned inside the window; the assignment notice says how long is left.
+- ESC-10-AC-3: The pill appears at due − 10 min and shows overdue at the due time.
+
+**Tests.** `api.test.ts` "ADR-0014 pre-deadline warning and start notice"; `schedule.test.ts` "nextCountdown"; `e2e/escalation-v2.spec.ts`.
+
+---
+
+## ESC-11 Reviewer deadline and review accountability (new, ADR-0014)
+
+**Description.** Submission does not stop escalation. A delay after an on-time submission is the reviewer's. [US-06; D-145; ADR-0014 §10]
+
+**Roles.** The reviewer (`tasks.reviewer_id`, else the giver) and the reviewer's manager.
+
+**Behaviour.**
+- Each escalation row stores `accountable` = `assignee` or `reviewer` (migration 018). It is `reviewer` when the task is `submitted` and the pending round was submitted at or before the due time; the reviewer is then added as "to". A late submission stays the assignee's.
+- The accountability report counts only `accountable = assignee` escalations against a person (`services/reports.ts`).
+- **R1** (`review_r1`) at submission + `reviewSlaMinutes[priority]`, to the reviewer. **R2** (`review_r2`) at submission + 2 × SLA, to the reviewer's manager (else the Founder's Office, as the ladder falls through), reviewer copied.
+- Each is sent once per review round (`job_runs` key `<task>@r<round>`) and not after the decision. Both follow the `review_required` preference type. They are notices, not L-levels.
+- SLA per vertical (POL). D-152 defaults: Critical 30 min, High 4 h, Normal 24 h, Low 48 h.
+
+**Acceptance criteria.**
+- ESC-11-AC-1: Submitted on time: escalations after the due time are `accountable = reviewer` and reach the reviewer.
+- ESC-11-AC-2: Submitted late: escalations stay the assignee's.
+- ESC-11-AC-3: R1 once at the SLA; R2 to the reviewer's manager at twice the SLA; none once the review is decided.
+
+**Tests.** `api.test.ts` "ADR-0014 review accountability, reviewer deadline, Critical at night, late reassignment".
 
 ---
 
@@ -465,4 +537,12 @@ The client keeps `recipientIds` and `ccIds` arrays [V-C `types/index.ts:206-223`
 - **D-25 (decided)**: the past-due floor while In review.
 - **D-26 (decided)**: who may acknowledge (to only, to + cc, overseers, CoS, CEO) and the scope of an acknowledgement (one level or all levels on the task).
 - **D-28 (decided)**: Founder's Office fall-through below L3 (CoS only vs CoS + CEO).
-- **D-30 (decided)**: escalations after a reassignment (re-fire to the new chain vs keep the old events).
+- **D-30 (decided)**: escalations after a reassignment (re-fire to the new chain vs keep the old events). **D-148 (2026-11-12):** reassigning a task that is past due or due within 10 minutes needs a new due time (422 `dueDate` otherwise), so the new person is not escalated on arrival.
+- **D-140…D-153 (decided 2026-11-12, ADR-0014):** deadline milestones (ESC-02), vertical policies (POL), notices (ESC-07, ESC-10), reviewer deadline (ESC-11), a Critical L1 never held in quiet hours (D-147, BR-53).
+
+## Changed 2026-11-13 (ADR-0015, D-158, D-160, D-164)
+- **Working time.** For **non-Critical** tasks, the silence clock and the L2/L3 steps after the due time count the assignee's vertical working time (days and hours, in its zone). Existing hour values are read as working time, and each vertical tunes them. **Critical** tasks keep plain clock time.
+- **Away time.** While the assignee is marked away, non-Critical silence pauses. Deadlines do not move: late is late.
+- **Late marks.** A mark never undoes time already counted.
+- **Code:** one clock in `shared/worktime.ts`, used by `shared/levels.ts` (`silenceClock`), `shared/policy.ts` (`deadlineMilestones`, `clock`) and the server (`services/worktime.ts`).
+- **Release:** see RELEASE_READINESS R-AC2.

@@ -3,6 +3,7 @@
 // boundaries use the viewer's zone (D-5).
 import { wallClock, zonedInstant } from '@taskwatch/shared/levels';
 import { ACTIVE_STATUSES, type Status } from '@taskwatch/shared/workflow';
+import { labelDepartments } from '@taskwatch/shared/permissions';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -452,7 +453,7 @@ export function buildDashboard(i: DashboardInput) {
     trend: trend(scope, now, range, zone),
     workload: workload(scope, i.people, now, range, i.overloadThreshold),
   };
-  const teamsInScope = i.teams.filter((tm) => scope.some((t) => t.teamId === tm.id));
+  const teamsInScope = labelDepartments(i.teams.filter((tm) => scope.some((t) => t.teamId === tm.id)), (tm) => tm.entityId);
   const ofTeam = (id: Id) => scope.filter((t) => t.teamId === id);
   const teamRows = teamsInScope.map((tm) => groupRow(tm.id, tm.name, ofTeam(tm.id)));
 
@@ -520,9 +521,10 @@ export interface TeamPerson extends DashPerson {
  * The reporting-line summary over the given people (CoS/CEO: everyone but themselves; others: transitive reports).
  * `nameOf` names managers outside the list (the viewer, or someone above them).
  */
-export function buildTeamOverview(viewerId: Id, people: TeamPerson[], tasks: DashTask[], teams: { id: Id; name: string }[], nameOf: (id: Id) => string | null) {
+export function buildTeamOverview(viewerId: Id, people: TeamPerson[], tasks: DashTask[], allTeams: DashTeam[], nameOf: (id: Id) => string | null) {
   const ids = new Set(people.map((u) => u.id));
   const scope = tasks.filter((t) => ids.has(t.assigneeId));
+  const teams = labelDepartments(allTeams.filter((tm) => scope.some((t) => t.teamId === tm.id) || people.some((u) => u.teamId === tm.id)), (tm) => tm.entityId);
   const open = scope.filter(isOpenNow);
   const name = (id: Id | null) => (id === null ? null : nameOf(id));
   const rowOf = (u: TeamPerson) => {

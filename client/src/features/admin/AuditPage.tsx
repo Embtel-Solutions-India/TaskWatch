@@ -1,3 +1,4 @@
+import { labelDepartments } from '@taskwatch/shared/permissions';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DataTable } from '../../components/DataTable';
@@ -100,9 +101,9 @@ export function AuditPage() {
                 </option>
               ))}
             </Select>
-            {BACKEND === 'mock' && <Select aria-label="Team" value={team} onChange={(e) => setTeam(e.target.value)}>
-              <option value="">Any team</option>
-              {db.teams.map((t) => (
+            {BACKEND === 'mock' && <Select aria-label="Department" value={team} onChange={(e) => setTeam(e.target.value)}>
+              <option value="">Any department</option>
+              {labelDepartments(db.teams, (t) => t.departmentId).map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>

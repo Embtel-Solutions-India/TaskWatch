@@ -38,6 +38,17 @@ export interface Department {
   id: string;
   name: string;
   headId: string | null;
+  /** ADR-0015 (D-159), server mode: what the vertical stores; null fields follow the organization. */
+  worktime?: Worktime;
+}
+
+/** ADR-0015: a vertical's time zone, quiet hours and working days/hours (0 = Sunday). Null = organization default. */
+export interface Worktime {
+  timeZone: string | null;
+  quietHours: { enabled: boolean; start: string; end: string } | null;
+  workDays: number[] | null;
+  workStart: string | null;
+  workEnd: string | null;
 }
 
 export interface Team {
@@ -64,6 +75,13 @@ export interface Task {
   updatedAt: string;
   startAt: string | null;
   dueAt: string;
+  /** ADR-0014 (server mode): the fixed instants of L1, L2 and L3, and what the assignee must hand in. */
+  milestones?: [string, string, string] | null;
+  /** ADR-0015, server mode: the assignee is marked away now, until this instant. */
+  assigneeAwayUntil?: string | null;
+  assigneeAwayKind?: 'absent' | 'leave' | 'half_day' | null;
+  submissionRequirements?: string | null;
+  policyVersion?: string | null;
   /** Last assignee progress update, or the (re)assignment time. Drives the silence clock. */
   clockStartedAt: string;
   acknowledgedAt: string | null;
@@ -200,6 +218,8 @@ export interface EscalationEvent {
   level: number;
   /** `blocked`: the task was marked Blocked (D-24, WO ladder L1). */
   reason: 'silence' | 'overdue' | 'blocked';
+  /** D-145 (server mode): who owns the delay. */
+  accountable?: 'assignee' | 'reviewer';
   /** The moment the level was reached (may be earlier than when the tick noticed it). */
   at: string;
   /** Silence-cycle start this event belongs to; each level fires once per cycle. */
@@ -312,7 +332,9 @@ export interface Recurrence {
   createdAt: string;
 }
 
-export interface RulesConfig {
+import type { PolicyExtras } from '@taskwatch/shared/policy';
+
+export interface RulesConfig extends PolicyExtras {
   windowsHours: Record<Priority, number>;
   multiples: [number, number, number, number];
   overdueOffsetsHours: [number, number, number];

@@ -1,3 +1,5 @@
+import { headOf } from './structure.js';
+import { attendanceApplies } from './attendance.js';
 import { WHATSAPP_ENABLED } from '@taskwatch/shared/notifications';
 // GET /api/me bootstrap (T-1.15, AUTH-06; API_CONTRACTS): everything the client needs on load, scoped to the caller.
 import type { Permission } from '@taskwatch/shared/permissions';
@@ -73,6 +75,9 @@ export async function bootstrap(user: DirUser, dir: Directory) {
       workdayEnd: settings.workdayEnd,
     },
     rules: ruleSet.for(user.entityId),
+    // ADR-0014 / D-141: the verticals this person heads; a general manager edits those verticals' policies.
+    headOf: await headOf(user.id, user.organizationId),
+    hasAttendance: await attendanceApplies(user), // ADR-0015
     badges: await badges(user, dir, permissions),
     integrations: { google: config.google.enabled, whatsapp: WHATSAPP_ENABLED && config.whatsapp.enabled, email: config.smtp.enabled, devLogin: config.devLogin },
     demo: config.demoTools ? { offsetHours: Math.round((clock.getOffsetMs() / 3_600_000) * 100) / 100 } : null,

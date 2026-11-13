@@ -8,7 +8,7 @@ import { HttpError, notFound } from '../http/errors.js';
 import { me, requireUser, SESSION_COOKIE, sessionCookieOptions } from '../http/middleware.js';
 import { rateLimit } from '../http/rateLimit.js';
 import { appendAdmin } from '../services/audit.js';
-import { passwordRule, passwordSignIn, recordAttempt } from '../services/auth.js';
+import { googleDomains, passwordRule, passwordSignIn, recordAttempt } from '../services/auth.js';
 import { BAD_TOKEN, requestReset, resetPassword } from '../services/passwordReset.js';
 import { bootstrap } from '../services/me.js';
 
@@ -83,7 +83,7 @@ authRouter.get('/auth/google/callback', googleCallbackLimit, async (req, res) =>
       [email],
     );
     // D-101: the person's organization's domains; GOOGLE_ALLOWED_DOMAINS when it has none (or the email is unknown).
-    const allowed = rows[0]?.google_domains.length ? rows[0].google_domains : config.google.allowedDomains;
+    const allowed = googleDomains(rows[0]?.google_domains);
     if (allowed.length && !allowed.includes(domain)) {
       return fail(`${email} is not on an allowed company domain.`, 'domain');
     }

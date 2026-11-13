@@ -2,6 +2,7 @@
 import { LeaderboardPage, PersonPerformancePage, WorkloadPage } from '../features/performance/PerformancePages';
 import type { ReactNode } from 'react';
 import type { Db, Permission, User } from '../types';
+import type { Bootstrap } from '../services/api/session';
 import { hasPerm, reportsOf } from '../services/authz/permissions';
 import { AccountSettingsPage, ProfilePage } from '../features/account/AccountPages';
 import { AuditPage } from '../features/admin/AuditPage';
@@ -15,6 +16,8 @@ import { AccountabilityPage, ReportPage, ReportsIndexPage } from '../features/re
 import { StaffDirectoryPage, StaffProfilePage } from '../features/staff/StaffPages';
 import { TeamPage } from '../features/staff/TeamPage';
 import { CalendarPage } from '../features/tasks/CalendarPage';
+import { SchedulePage } from '../features/schedule/SchedulePage';
+import { AttendancePage, MyAttendancePage } from '../features/attendance/AttendancePages';
 import { TaskDetailPage } from '../features/tasks/TaskDetailPage';
 import { EditTaskPage, NewTaskPage } from '../features/tasks/TaskFormPage';
 import { TaskListPage } from '../features/tasks/TaskListPage';
@@ -39,12 +42,26 @@ export interface RouteDef {
    * not connected yet.
    */
   server?: true | Permission | readonly Permission[];
+  /** Server mode: also open to a vertical's general manager (ADR-0014 / D-141), whatever the permission says. */
+  gm?: true;
+  /** Server mode: shown only when this holds for the signed-in person (e.g. My attendance, ADR-0015). */
+  when?: (b: Bootstrap) => boolean;
 }
 
 export const supervises: Allow = (db, u) => hasPerm(db, u, 'view_tasks') && (u.role === 'cos' || reportsOf(db, u.id).size > 0);
 /** Server mode: the same gate from /api/me (the mock store does not know server people). */
 export const supervisesOnServer = (permissions: readonly Permission[], roles: readonly string[], reportCount: number) =>
   permissions.includes('view_tasks') && (roles.includes('cos') || reportCount > 0);
+/**
+ * Server mode: may this person open a connected route? One check for the sidebar and the page guard, from /api/me only.
+ * Never the prototype's role table: that lives in browser storage and may hold a matrix edited in the prototype.
+ */
+export function serverAllows(r: RouteDef, b: Bootstrap): boolean {
+  if (r.when && !r.when(b)) return false;
+  if (r.gm && b.headOf?.length) return true; // a vertical's general manager (ADR-0014 / D-141)
+  if (r.server === true) return true;
+  return !!r.server && [r.server].flat().some((p) => b.permissions.includes(p));
+}
 const creates: Allow = (db, u) => hasPerm(db, u, 'create_tasks');
 const REPORT_PERMS = ['view_team_reports', 'view_org_reports'] as const;
 const reports: Allow = (db, u) => REPORT_PERMS.some((p) => hasPerm(db, u, p));
@@ -55,8 +72,10 @@ export const ROUTES: RouteDef[] = [
   { path: '/tasks/mine', title: 'My Tasks', element: <TaskListPage scope="mine" />, server: true, nav: { section: 'General', icon: 'check-square', badge: 'mine' } },
   { path: '/tasks/assigned-by-me', title: 'Assigned by Me', element: <TaskListPage scope="assigned_by_me" />, allow: creates, server: true, nav: { section: 'General', icon: 'send' } },
   { path: '/tasks/team', title: 'Team Tasks', element: <TaskListPage scope="team" />, allow: supervises, server: true, nav: { section: 'General', icon: 'layers' } },
+  { path: '/schedule', title: 'Schedule', element: <SchedulePage />, server: true, nav: { section: 'General', icon: 'clock' } },
   { path: '/calendar', title: 'Task Calendar', element: <CalendarPage />, server: true, nav: { section: 'General', icon: 'calendar' } },
   { path: '/notifications', title: 'Notifications', element: <NotificationsPage />, server: true, nav: { section: 'General', icon: 'bell', badge: 'notifications' } },
+  { path: '/my-attendance', title: 'My attendance', element: <MyAttendancePage />, allow: () => false /* server mode only */, server: true, when: (b) => !!b.hasAttendance, nav: { section: 'General', icon: 'calendar' } },
   { path: '/tasks/new', title: 'New task', element: <NewTaskPage />, allow: creates, server: true, parent: '/tasks/assigned-by-me' },
   { path: '/tasks/:id', title: 'Task', element: <TaskDetailPage />, server: true, parent: '/tasks/mine' },
   { path: '/tasks/:id/edit', title: 'Edit task', element: <EditTaskPage />, server: true, parent: '/tasks/:id' },
@@ -73,12 +92,13 @@ export const ROUTES: RouteDef[] = [
   { path: '/reports/entities', title: 'Vertical & person accountability', element: <AccountabilityPage />, allow: reports, server: REPORT_PERMS, parent: '/reports' },
   { path: '/reports/:reportId', title: 'Report', element: <ReportPage />, allow: reports, server: REPORT_PERMS, parent: '/reports' },
 
-  { path: '/admin/staff', title: 'Staff Management', element: <StaffDirectoryPage />, allow: perm('manage_staff'), server: 'manage_staff', nav: { section: 'Administration', icon: 'users', label: 'Staff' } },
+  { path: '/attendance', title: 'Attendance', element: <AttendancePage />, allow: perm('manage_staff'), server: 'manage_staff', gm: true, nav: { section: 'Management', icon: 'calendar' } },
+  { path: '/admin/staff', title: 'Staff Management', element: <StaffDirectoryPage />, allow: perm('manage_staff'), server: 'manage_staff', gm: true, nav: { section: 'Administration', icon: 'users', label: 'Staff' } },
   { path: '/admin/staff/:id', title: 'Staff profile', element: <StaffProfilePage />, parent: '/admin/staff', server: true },
-  { path: '/admin/verticals', title: 'Verticals & departments', element: <VerticalsPage />, allow: perm('manage_staff'), server: 'manage_staff', nav: { section: 'Administration', icon: 'building', label: 'Verticals' } },
+  { path: '/admin/verticals', title: 'Verticals & departments', element: <VerticalsPage />, allow: perm('manage_staff'), server: 'manage_staff', gm: true, nav: { section: 'Administration', icon: 'building', label: 'Verticals' } },
   { path: '/admin/org', title: 'Organization Structure', element: <OrgPage />, allow: perm('manage_staff'), server: 'manage_staff', nav: { section: 'Administration', icon: 'tree', label: 'Organization' } },
   { path: '/admin/roles', title: 'Roles & Permissions', element: <RolesPage />, allow: perm('manage_roles'), server: 'manage_roles', nav: { section: 'Administration', icon: 'key' } },
-  { path: '/admin/policies', title: 'Escalation Policies', element: <PoliciesPage />, allow: perm('manage_escalation_policies'), server: 'manage_escalation_policies', nav: { section: 'Administration', icon: 'sliders' } },
+  { path: '/admin/policies', title: 'Escalation Policies', element: <PoliciesPage />, allow: perm('manage_escalation_policies'), server: 'manage_escalation_policies', gm: true, nav: { section: 'Administration', icon: 'sliders' } },
   { path: '/admin/audit', title: 'Audit Logs', element: <AuditPage />, allow: perm('view_audit_logs'), server: 'view_audit_logs', nav: { section: 'Administration', icon: 'file' } },
   { path: '/admin/deliveries', title: 'Delivery Log', element: <DeliveryLogPage />, allow: perm('view_audit_logs'), server: 'view_audit_logs', nav: { section: 'Administration', icon: 'message' } },
   { path: '/admin/settings', title: 'System Settings', element: <SettingsPage />, allow: perm('manage_system_settings'), server: 'manage_system_settings', nav: { section: 'Administration', icon: 'settings' } },

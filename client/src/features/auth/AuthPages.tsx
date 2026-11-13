@@ -41,18 +41,12 @@ function AuthFrame({
       <div className="auth-panel">
         {/* Owner's sign-in design (2026-11-11): the form sits in a deep-blue card on a plain white or black page. */}
         <div className="auth-card">
-          <div className="brand auth-brand">
-            <span className="brand-mark" aria-hidden>
-              <Icon name="check" size={16} />
-            </span>
-            <span className="brand-text">
-              <strong>TaskWatch</strong>
-            </span>
-          </div>
+          <img className="auth-logo" src="/icons/logo-on-dark.png" alt="TaskWatch" />
           <h1>{title}</h1>
           {sub && <p className="muted">{sub}</p>}
           {children}
         </div>
+        <p className="auth-credit">A product of Embtel Solutions Inc</p>
       </div>
       <aside className="auth-side auth-art" aria-hidden>
         {/* Owner's sign-in illustration (2026-11-11, transparent): "Stay on top of work, never miss a deadline." is part of the image. */}
@@ -210,6 +204,18 @@ function useAfterSignIn(onLogin: () => Promise<void>) {
   };
 }
 
+/** Google's four-colour "G", as its sign-in branding asks; decorative (the button says "Sign in with Google"). */
+function GoogleG() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+    </svg>
+  );
+}
+
 function ServerLogin({ onLogin }: { onLogin: () => Promise<void> }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -256,12 +262,18 @@ function ServerLogin({ onLogin }: { onLogin: () => Promise<void> }) {
         {err && err.status !== 422 && (
           <Banner tone="danger">{err.message}</Banner>
         )}
-        <CredentialFields email={email} setEmail={setEmail} password={password} setPassword={setPassword} err={err} busy={busy} />
         {cfg?.google && (
-          <a href="/api/auth/google" className="btn btn-lg">
-            Sign in with Google
-          </a>
+          <>
+            <a href="/api/auth/google" className="btn btn-google">
+              <GoogleG />
+              Sign in with Google
+            </a>
+            <div className="auth-or" role="separator">
+              <span>or sign in with email</span>
+            </div>
+          </>
         )}
+        <CredentialFields email={email} setEmail={setEmail} password={password} setPassword={setPassword} err={err} busy={busy} />
       </form>
       {cfg?.devLogin && devUsers.length > 0 && (
         <div className="demo-login">
@@ -359,15 +371,20 @@ export function ForgotPasswordPage() {
 export function ResetPasswordPage() {
   const [params] = useSearchParams();
   const token = params.get("token") ?? "";
+  // D-172: the onboarding email's link adds welcome=1, so a new person sets a first password rather than "resets" one.
+  const welcome = params.get("welcome") === "1";
   const [pw, setPw] = useState("");
   const [confirm, setConfirm] = useState("");
   const [err, setErr] = useState<ApiError | null>(null);
   const [done, setDone] = useState(false);
   return (
-    <AuthFrame title="Choose a new password">
+    <AuthFrame
+      title={welcome ? "Welcome to TaskWatch" : "Choose a new password"}
+      sub={welcome ? "Choose a password for your new account. You'll use it with your work email to sign in." : undefined}
+    >
       {done ? (
         <div className="stack">
-          <Banner tone="ok">Your password has been reset.</Banner>
+          <Banner tone="ok">{welcome ? "Your password is set. You can sign in now." : "Your password has been reset."}</Banner>
           {BACKEND === "mock" && (
             <Banner tone="info" icon="zap">
               Prototype: passwords are not stored. Continue to sign in with{" "}
@@ -396,15 +413,16 @@ export function ResetPasswordPage() {
         >
           {!token && (
             <Banner tone="warn">
-              This page needs a reset token. Request a new link from the sign-in
-              page.
+              {welcome
+                ? "This link is incomplete. Ask your manager to send the onboarding email again."
+                : "This page needs a reset token. Request a new link from the sign-in page."}
             </Banner>
           )}
           {err && err.status !== 422 && (
             <Banner tone="danger">{err.message}</Banner>
           )}
           <Field
-            label="New password"
+            label={welcome ? "Password" : "New password"}
             htmlFor="pw"
             hint="At least 10 characters, with letters and a number."
             error={err?.fields?.password}
@@ -433,7 +451,7 @@ export function ResetPasswordPage() {
             />
           </Field>
           <Button type="submit" variant="primary" disabled={!token}>
-            Reset password
+            {welcome ? "Set password" : "Reset password"}
           </Button>
         </form>
       )}

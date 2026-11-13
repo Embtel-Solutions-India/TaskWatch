@@ -5,6 +5,7 @@ import { Icon } from '../components/icons';
 import { Avatar, Button, IconButton, Popover } from '../components/ui';
 import { DemoBar } from '../features/demo/DemoBar';
 import { ServerClockBar } from '../features/demo/ServerClockBar';
+import { DeadlineTimer } from '../features/shell/DeadlineTimer';
 import { useAction, useApi, useAuth, useLocalState, useMediaQuery } from '../hooks';
 import { listNotifications, logout, markAllRead, markRead } from '../services/api/misc';
 import { sessionApi } from '../services/api/session';
@@ -16,8 +17,9 @@ import { canViewTask, hasPerm } from '../services/authz/permissions';
 import { cx, relative } from '../utils/format';
 import { getThemePref, resolvedTheme, setThemePref, type ThemePref } from '../utils/theme';
 import { NOTIFICATION_LABEL } from '../constants';
-import { crumbs, ROUTES, supervises, supervisesOnServer, type BadgeKey, type NavSection } from './routes';
+import { crumbs, ROUTES, serverAllows, supervises, supervisesOnServer, type BadgeKey, type NavSection } from './routes';
 import { SearchPalette } from './SearchPalette';
+import { disablePush } from '../services/push';
 
 function useBadges(): Record<BadgeKey, number> {
   useSyncExternalStore(subscribe, getRev);
@@ -66,10 +68,13 @@ export function Shell({ children }: { children: ReactNode }) {
   }, []);
 
   const sections: NavSection[] = ['General', 'Management', 'Administration'];
+  // Server mode: connected screens follow /api/me exactly like the page guard; only not-yet-connected ones use the prototype's rules.
   const allowed = (r: (typeof ROUTES)[number]) =>
-    BACKEND === 'server' && r.allow === supervises && bootstrap
+    BACKEND === 'server' && bootstrap && r.allow === supervises
       ? supervisesOnServer(bootstrap.permissions, bootstrap.user.roles, bootstrap.user.reportCount)
-      : !r.allow || r.allow(db, user);
+      : BACKEND === 'server' && bootstrap && r.server
+        ? serverAllows(r, bootstrap)
+        : !r.allow || r.allow(db, user);
   const items = ROUTES.filter((r) => r.nav && allowed(r));
   const trail = crumbs(loc.pathname);
   const isCollapsed = collapsed && !mobile;
@@ -77,13 +82,14 @@ export function Shell({ children }: { children: ReactNode }) {
   const sidebar = (
     <nav className={cx('sidebar', isCollapsed && 'collapsed', mobile && 'mobile', mobile && drawer && 'open')} aria-label="Main">
       <div className="brand">
-        <span className="brand-mark" aria-hidden>
-          <Icon name="check" size={15} />
-        </span>
-        {!isCollapsed && (
-          <span className="brand-text">
-            <strong>TaskWatch</strong>
-            <small>{BACKEND === 'server' ? bootstrap?.settings.orgName : db.settings.orgName}</small>
+        {isCollapsed ? (
+          <img className="brand-mark" src="/icons/mark.png" alt="TaskWatch" />
+        ) : (
+          <span className="brand-logo">
+            <img className="logo-light" src="/icons/logo.png" alt="TaskWatch" />
+            <img className="logo-dark" src="/icons/logo-on-dark.png" alt="" aria-hidden />
+            {/* The signed-in person's vertical; the prototype has no verticals, so it shows the organization. */}
+            <small>{BACKEND === 'server' ? bootstrap?.user.entityName ?? bootstrap?.settings.orgName : db.settings.orgName}</small>
           </span>
         )}
         {mobile && <IconButton icon="x" label="Close menu" className="sidebar-close" onClick={() => setDrawer(false)} />}
@@ -151,9 +157,9 @@ export function Shell({ children }: { children: ReactNode }) {
                 ))}
               </ol>
             </nav>
-            <button type="button" className="search-trigger" onClick={() => setSearchOpen(true)} aria-label="Search tasks, people and teams">
+            <button type="button" className="search-trigger" onClick={() => setSearchOpen(true)} aria-label="Search tasks, people and departments">
               <Icon name="search" size={15} />
-              <span className="search-trigger-text">Search tasks, people, teams…</span>
+              <span className="search-trigger-text">Search tasks, people, departments…</span>
               <kbd>Ctrl K</kbd>
             </button>
             <ThemeButton />
@@ -188,6 +194,8 @@ export function Shell({ children }: { children: ReactNode }) {
                     className="menu-item"
                     onClick={async () => {
                       close();
+                      // ADR-0012: a shared computer stops getting this person's alerts once they sign out.
+                      if (BACKEND === 'server') await disablePush().catch(() => {});
                       if (BACKEND === 'server') await sessionApi.logout().catch(() => {});
                       else logout();
                       refresh();
@@ -200,6 +208,7 @@ export function Shell({ children }: { children: ReactNode }) {
               )}
             </Popover>
           </header>
+          <DeadlineTimer />
           <main id="main" className="content" tabIndex={-1}>
             {children}
           </main>

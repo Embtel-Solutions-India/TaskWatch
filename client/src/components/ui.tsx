@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { Link } from 'react-router-dom';
 import { LEVEL_LABEL, LEVEL_SHORT, PRIORITY_LABEL, ROLE_LABEL, STATUS_LABEL } from '../constants';
 import type { Priority, Role, Status } from '../types';
@@ -285,6 +285,28 @@ export function Field({ label, hint, error, children, required, htmlFor }: { lab
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }) {
   const { invalid, className, ...rest } = props;
+  // Number fields: callers store Number(text), so clearing the box stores 0 and React would redraw "0" — the next digit
+  // then reads "06". While typing, show the typed text as long as it means the same number as the stored value.
+  const [draft, setDraft] = useState<string | null>(null);
+  if (props.type === 'number' && props.value !== undefined) {
+    const shown = draft !== null && Number(draft) === Number(props.value) ? draft : props.value;
+    return (
+      <input
+        className={cx('input', className)}
+        aria-invalid={invalid || undefined}
+        {...rest}
+        value={shown}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          props.onChange?.(e);
+        }}
+        onBlur={(e) => {
+          setDraft(null);
+          props.onBlur?.(e);
+        }}
+      />
+    );
+  }
   return <input className={cx('input', className)} aria-invalid={invalid || undefined} {...rest} />;
 }
 export function Select(props: SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }) {
@@ -454,6 +476,21 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, children, confi
 
 /* ---------------- Popover / menu ---------------- */
 
+/**
+ * Where `position: fixed` coordinates start for `el`. Normally the viewport, but an ancestor with backdrop-filter,
+ * transform, filter, perspective, contain or will-change (e.g. the sticky .topbar) becomes the containing block.
+ */
+function fixedOrigin(el: HTMLElement): { top: number; left: number } {
+  for (let e = el.parentElement; e; e = e.parentElement) {
+    const s = getComputedStyle(e);
+    if (s.transform !== 'none' || s.filter !== 'none' || s.backdropFilter !== 'none' || s.perspective !== 'none' || /paint|layout|strict|content/.test(s.contain) || /transform|filter|perspective/.test(s.willChange)) {
+      const r = e.getBoundingClientRect();
+      return { top: r.top + e.clientTop, left: r.left + e.clientLeft };
+    }
+  }
+  return { top: 0, left: 0 };
+}
+
 export function Popover({ trigger, children, align = 'end', className, open: controlled, onOpenChange }: { trigger: (p: { open: boolean; toggle: () => void; id: string }) => ReactNode; children: ReactNode | ((close: () => void) => ReactNode); align?: 'start' | 'end'; className?: string; open?: boolean; onOpenChange?: (o: boolean) => void }) {
   const [inner, setInner] = useState(false);
   const open = controlled ?? inner;
@@ -475,12 +512,40 @@ export function Popover({ trigger, children, align = 'end', className, open: con
       document.removeEventListener('keydown', onKey);
     };
   }, [open, setOpen]);
+  // Fixed to the viewport, so a scrolling table or card cannot clip it; opens upward when there is no room below.
+  // Not portalled: native modal dialogs sit in the top layer, and a popover inside one must stay inside it.
+  const pop = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<CSSProperties>({ visibility: 'hidden' });
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const t = ref.current?.getBoundingClientRect();
+      const p = pop.current;
+      if (!t || !p) return;
+      // Measure at natural width: in flow (or near the right edge) it shrinks to fit and wraps its text.
+      Object.assign(p.style, { position: 'fixed', top: '0px', left: '0px', right: 'auto' });
+      const gap = 6;
+      const edge = 8;
+      const below = t.bottom + gap + p.offsetHeight <= innerHeight - edge || t.top - gap - p.offsetHeight < edge;
+      const left = Math.min(Math.max(edge, align === 'end' ? t.right - p.offsetWidth : t.left), innerWidth - p.offsetWidth - edge);
+      const origin = fixedOrigin(p);
+      setPos({ position: 'fixed', top: (below ? t.bottom + gap : t.top - gap - p.offsetHeight) - origin.top, left: left - origin.left, right: 'auto' });
+    };
+    place();
+    addEventListener('resize', place);
+    addEventListener('scroll', place, true);
+    return () => {
+      removeEventListener('resize', place);
+      removeEventListener('scroll', place, true);
+      setPos({ visibility: 'hidden' });
+    };
+  }, [open, align]);
   const close = () => setOpen(false);
   return (
     <div className="popover-wrap" ref={ref}>
       {trigger({ open, toggle: () => setOpen(!open), id })}
       {open && (
-        <div id={id} className={cx('popover', `popover-${align}`, className)}>
+        <div id={id} ref={pop} style={pos} className={cx('popover', `popover-${align}`, className)}>
           {typeof children === 'function' ? children(close) : children}
         </div>
       )}

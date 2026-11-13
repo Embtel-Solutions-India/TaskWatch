@@ -3,22 +3,13 @@ import crypto from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import pg from 'pg';
 import { e2eDatabaseUrl, E2E_PASSWORD, MANAGER, STAFF } from './fixtures.js';
+import { passwordSignIn, userMenu } from './helpers.js';
 
 try {
   process.loadEnvFile('.env'); // DATABASE_URL, to reach the e2e database
 } catch {
   /* CI may pass it in the environment */
 }
-
-async function passwordSignIn(page: Page, email: string, password: string) {
-  await page.goto('/login');
-  await page.getByLabel('Work email').fill(email);
-  await page.getByLabel('Password', { exact: true }).fill(password); // not the "Show password" button (login redesign)
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-}
-
-/** The signed-in user's menu button in the shell: the only button with a menu popup (never a dev-login tile). */
-const userMenu = (page: Page, name: string) => page.locator('button[aria-haspopup="menu"]', { hasText: name });
 
 async function signOut(page: Page, name: string) {
   await userMenu(page, name).click();

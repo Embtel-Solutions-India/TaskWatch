@@ -1,6 +1,6 @@
 # Requirement Traceability Matrix
 
-> Last updated: 2026-11-03. Traces Work Order FO-2026-OPS-01 → feature IDs ([PRD](../02-product-requirements/PRODUCT_REQUIREMENTS.md)) → FRD section → ADR → tasks ([TASK_BREAKDOWN](TASK_BREAKDOWN.md)) → test cases ([TEST_CASE_INVENTORY](../05-testing-and-qa/TEST_CASE_INVENTORY.md)) → status ([IMPLEMENTATION_TRACKER](IMPLEMENTATION_TRACKER.md)).
+> Last updated: 2026-11-12 (§5 ADR-0014 stories and decisions; AC-2 row). Before that: 2026-11-03. Traces Work Order FO-2026-OPS-01 → feature IDs ([PRD](../02-product-requirements/PRODUCT_REQUIREMENTS.md)) → FRD section → ADR → tasks ([TASK_BREAKDOWN](TASK_BREAKDOWN.md)) → test cases ([TEST_CASE_INVENTORY](../05-testing-and-qa/TEST_CASE_INVENTORY.md)) → status ([IMPLEMENTATION_TRACKER](IMPLEMENTATION_TRACKER.md)).
 > **Status column:** the feature statuses (ANALYSIS, READY or BLOCKED). No requirement is implemented or tested. Every test case is either *planned* or *existing, not run*.
 
 **FRD files** (all in [../02-product-requirements/features/](../02-product-requirements/features/)): AUTH = [AUTH-FRD](../02-product-requirements/features/AUTH-FRD.md) · TASKS = [TASKS-FRD](../02-product-requirements/features/TASKS-FRD.md) · WF = [TASK-WORKFLOW-FRD](../02-product-requirements/features/TASK-WORKFLOW-FRD.md) · COLLAB = [COLLABORATION-FRD](../02-product-requirements/features/COLLABORATION-FRD.md) · ESC = [ESCALATION-FRD](../02-product-requirements/features/ESCALATION-FRD.md) · NTF = [NOTIFICATIONS-FRD](../02-product-requirements/features/NOTIFICATIONS-FRD.md) · REC = [RECURRING-FRD](../02-product-requirements/features/RECURRING-FRD.md) · DASH = [DASHBOARD-FRD](../02-product-requirements/features/DASHBOARD-FRD.md) · RPT = [REPORTS-FRD](../02-product-requirements/features/REPORTS-FRD.md) · STAFF = [STAFF-AND-ORG-FRD](../02-product-requirements/features/STAFF-AND-ORG-FRD.md) · ADMIN = [ADMINISTRATION-FRD](../02-product-requirements/features/ADMINISTRATION-FRD.md) · SRCH = [SEARCH-FRD](../02-product-requirements/features/SEARCH-FRD.md) · DEMO = [DEMO-TOOLS-FRD](../02-product-requirements/features/DEMO-TOOLS-FRD.md). Each FRD section is headed by its feature ID. Its acceptance criteria are `<ID>-AC-n`.
@@ -55,7 +55,7 @@ Criteria text: [PROJECT_OVERVIEW §1.7](../01-discovery/PROJECT_OVERVIEW.md). Re
 | AC | Feature IDs | FRD section | ADR | Tasks | Test cases | Gate | Status |
 |---|---|---|---|---|---|---|---|
 | AC-1 | ESC-01, ESC-03, ESC-08 | ESC §ESC-01, §ESC-08 | 0007 (Proposed) | T-1.2, T-5.1, T-5.5, T-11.5 | TC-ESC-01-05, TC-ESC-01-06, TC-ESC-08-02 | R-AC1 | ANALYSIS |
-| AC-2 | ESC-02 | ESC §ESC-02 | 0005 | T-5.1 | TC-ESC-02-01, -02, -04 | R-AC2 | ANALYSIS |
+| AC-2 (per approved policy, D-140) | ESC-02 | ESC §ESC-02 | 0005, 0014 | T-5.1; ADR-0014 plan Tasks 1–3 | TC-ESC-02-01, -02, -04, -05, -06 | R-AC2 | Shipped delays reproduce +24 h/+72 h; ADR-0014 rows in §5 |
 | AC-3 | WF-11, NTF-07, NTF-03 | WF §WF-11; NTF §NTF-07 | 0003 | T-4.6, T-6.4 | TC-WF-11-01…05 | R-AC3 | ANALYSIS (D-23, D-24) |
 | AC-4 | CMT-01, WF-03 | COLLAB §CMT-01; WF §WF-03 | — | T-4.5, T-4.10 | TC-CMT-01-01, TC-WF-03-01 | R-AC4 | ANALYSIS |
 | AC-5 | NTF-02, ESC-04, DLV-01 | NTF §NTF-02, §DLV-01; ESC §ESC-04 | — | T-5.2, T-6.3, T-6.7, T-11.4 | TC-ESC-04-01…06, TC-NTF-02-01, -02, -06, TC-DLV-01-02 | R-AC5 | ANALYSIS (WO-D6) |
@@ -112,6 +112,37 @@ TC-WF-03-06 is filed under WF-03 but measures AC-10 adoption, not WF-03 behaviou
 - No WO requirement is untraced.
 - Separately, the WO's own decisions **WO-D2…WO-D7** are not recorded as answered in [OPEN_QUESTIONS](../01-discovery/OPEN_QUESTIONS.md). The WO asks for them before WP-1 [WO p.7].
 
+## 5. Owner user stories and decisions (ADR-0014, 2026-11-12)
+
+Beyond the WO; the owner's stories US-01…US-07 ([ADR-0014 §20](../03-architecture/decisions/ADR-0014.md)) and decisions D-140…D-153 ([OPEN_QUESTIONS §14](../01-discovery/OPEN_QUESTIONS.md)). Tasks are in [ADR-0014-IMPLEMENTATION-PLAN](ADR-0014-IMPLEMENTATION-PLAN.md). Status is the [tracker](IMPLEMENTATION_TRACKER.md)'s: **TESTING** = built and targeted runs green, full `npm test` and plan Task 14 Steps 1 and 3 open.
+
+| Story | Feature IDs | FRD section | Decisions | Plan tasks | Test cases | Status |
+|---|---|---|---|---|---|---|
+| US-01 Schedule and assign | TASK-01 (ADR-0014 additions), TASK-11 | TASKS §TASK-01, §TASK-11 | D-144, D-151, D-153 | 4, 12 | TC-TASK-01-09…14, TC-TASK-11-01 | TESTING |
+| US-02 Vertical policy (GM) | POL-01, POL-04 | ADMIN §POL-01, §POL-04 | D-140, D-141, D-142, D-150 | 7, 8, 9 | TC-POL-04-01…07, TC-ESC-10-03 | TESTING |
+| US-03 Cross-vertical admin (CoS) | POL-04 | ADMIN §POL-04 | D-141, D-146, D-152 | 8, 9, 14 | TC-POL-04-03, -04, -06, TC-ESC-02-07 | TESTING; D-152 values entered 2026-11-12 (not applied to open tasks) |
+| US-04 My schedule | TASK-11 | TASKS §TASK-11 | — | 12 | TC-TASK-11-01, TC-TASK-01-13 | TESTING |
+| US-05 Warning and countdown | ESC-10, ESC-07 | ESC §ESC-07, §ESC-10 | D-143, D-149 | 5, 6, 13 | TC-ESC-07-01, -02, TC-ESC-10-01…03 | TESTING |
+| US-06 Submit and track review | ESC-11, ESC-04 | ESC §ESC-04, §ESC-11 | D-145 | 10, 11 | TC-ESC-11-01, -02 | TESTING |
+| US-07 Progress updates | ESC-02 | ESC §ESC-02 | D-140, D-146 | 1, 2, 3 | TC-ESC-02-05, -06 | TESTING |
+
+| Decision | Feature IDs | Test cases |
+|---|---|---|
+| D-140 | ESC-02, POL-01 | TC-ESC-02-05, -06 |
+| D-141 | POL-04 | TC-POL-04-03 |
+| D-142 | POL-04, ESC-04 | TC-POL-04-01, -05, TC-ESC-04-08 |
+| D-143 | ESC-07, ESC-10 | TC-ESC-07-01, -02, TC-ESC-10-01 |
+| D-144 | TASK-01, ESC-07 | TC-TASK-01-09, TC-ESC-07-02 |
+| D-145 | ESC-11 | TC-ESC-11-01, -02 |
+| D-146 | ESC-02, POL-04 | TC-ESC-02-07 |
+| D-147 | ESC-05, NTF-03 | TC-NTF-03-04 |
+| D-148 | WF-07 | TC-WF-07-02 |
+| D-149 | ESC-10 | TC-ESC-10-02, -03 |
+| D-150 | POL-04 | TC-POL-04-03, -04 |
+| D-151 | TASK-01 | TC-TASK-01-13, -14 |
+| D-152 | POL-01, ESC-11 | none yet (values entered through the UI, plan Task 14 Step 1) |
+| D-153 | TASK-01 | TC-TASK-01-12 |
+
 ## Features with no work-order requirement (prototype scope)
 
 These features come from the prototype UI, not from a WO FR. They are kept because the WO says the approved behaviour is shown in the prototype and does not contradict them. Each one traces to its FRD, its tracker row, and test cases `TC-<ID>-NN` in [TEST_CASE_INVENTORY](../05-testing-and-qa/TEST_CASE_INVENTORY.md). Validation found 2026-11-04 that every one of them has at least one test case.
@@ -125,3 +156,14 @@ These features come from the prototype UI, not from a WO FR. They are kept becau
 | Escalation and notification UX | ESC-07 (due-soon/overdue notices), ESC-09 (escalations workspace), NTF-04 (preferences), NTF-06 (simulation mode), DLV-02 (my deliveries) | [V-C] `core.ts`, `EscalationsPage.tsx`, `AccountPages.tsx`, `channels.ts` |
 | Views and reports | DASH-02 (team overview), RPT-01, RPT-02, RPT-04 (report scope, nine reports, scoped filter options) | [V-C] `TeamPage.tsx`, `ReportsPages.tsx` |
 | Administration | STAFF-04 (profile), ORG-01 (org tree), ROLE-02 (edit permission matrix), POL-02 (policy simulator), SET-01 (system settings), DEMO-01 (demo tools) | [V-C] `StaffPages.tsx`, `OrgPage.tsx`, `AdminPages.tsx`, `DemoBar.tsx` |
+
+## 6. Attendance and vertical working time (ADR-0015, 2026-11-13)
+
+| Decision | Feature | Code | Tests | Status |
+|---|---|---|---|---|
+| D-156, D-161, D-163 | ATT-01 | `services/attendance.ts`, `routes/attendance.ts`, `features/attendance/` | TC-ATT-01…07 | TESTING |
+| D-157 | ATT-01/02 | same | TC-ATT (unmarked) | TESTING |
+| D-158, D-164 | ATT-03 | `services/worktime.ts`, engine, queries | TC-ATT-08, e2e | TESTING |
+| D-159, D-165 | ORG-03 | `services/structure.ts` (worktime), `directory.ts`, VerticalsPage | TC-ORG-03-*, TC-WT-04 | TESTING |
+| D-160 | ESC-02 | `shared/worktime.ts`, `shared/levels.ts`, `shared/policy.ts` | TC-WT-01…05 | TESTING |
+| D-162 | STAFF-06 | `routes/people.ts` (`staffScope`), `services/staff.ts` | TC-STAFF-06-* | TESTING |

@@ -1,3 +1,4 @@
+import { labelDepartments } from '@taskwatch/shared/permissions';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { DAY, HOUR, PRIORITY_ORDER, STATUS_LABEL } from '../../constants';
@@ -16,21 +17,21 @@ import { ACTIVE_STATUSES, PRIORITIES, STATUSES } from '../../types';
 import { cx, dueLabel, formatDateTime, formatShort, relative } from '../../utils/format';
 
 export function TaskTitle({ t, sub = true }: { t: TaskView; sub?: boolean }) {
+  const unack = ACTIVE_STATUSES.includes(t.status) && !t.acknowledgedAt;
   return (
     <span className="task-title">
       <Link to={`/tasks/${t.id}`} className="task-link">
         {t.title}
       </Link>
-      {sub && (
+      {sub && (t.recurrenceId || unack) && (
         <span className="task-sub">
-          {t.category}
           {t.recurrenceId && (
             <>
-              {' · '}
               <Icon name="repeat" size={11} /> recurring
             </>
           )}
-          {ACTIVE_STATUSES.includes(t.status) && !t.acknowledgedAt && <span className="unack"> · not acknowledged</span>}
+          {t.recurrenceId && unack && ' · '}
+          {unack && <span className="unack">not acknowledged</span>}
         </span>
       )}
     </span>
@@ -110,7 +111,7 @@ export function taskColumns(opts: { hideAssignee?: boolean; hideGiver?: boolean 
     { id: 'due', header: 'Due', width: '150px', cell: (t) => <DueCell t={t} />, sort: (t) => t.dueAt },
     { id: 'updated', header: 'Last update', width: '120px', cell: (t) => <span title={formatDateTime(t.lastUpdateAt)}>{relative(t.lastUpdateAt)}</span>, sort: (t) => t.lastUpdateAt },
     { id: 'level', header: 'Escalation', width: '110px', cell: (t) => <LevelBadge level={t.level} acked={t.escalationAcked} />, sort: (t) => t.level },
-    { id: 'team', header: 'Team', defaultHidden: true, cell: (t) => t.team?.name ?? '—', sort: (t) => t.team?.name ?? '' },
+    { id: 'team', header: 'Department', defaultHidden: true, cell: (t) => t.team?.name ?? '—', sort: (t) => t.team?.name ?? '' },
     { id: 'created', header: 'Created', defaultHidden: true, cell: (t) => formatShort(t.createdAt), sort: (t) => t.createdAt },
     { id: 'actions', header: 'Actions', fixed: true, width: '60px', cell: (t) => <RowActions t={t} /> },
   ];
@@ -173,7 +174,9 @@ export function activeFilterCount(f: TaskFilter): number {
 export function TaskFilters({ value, onChange, rows, showAssignee = true, showGiver = true }: { value: TaskFilter; onChange: (f: TaskFilter) => void; rows: TaskView[]; showAssignee?: boolean; showGiver?: boolean }) {
   const set = <K extends keyof TaskFilter>(k: K, v: TaskFilter[K]) => onChange({ ...value, [k]: v });
   const people = (pick: (t: TaskView) => { id: string; name: string } | undefined) => [...new Map(rows.map((t) => pick(t)).filter(Boolean).map((p) => [p!.id, p!.name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  const teams = [...new Map(rows.filter((t) => t.team).map((t) => [t.team!.id, t.team!.name])).entries()];
+  const teams = labelDepartments([...new Map(rows.filter((t) => t.team).map((t) => [t.team!.id, t.team!])).values()], (t) => t.departmentId)
+    .map((t) => [t.id, t.name] as const)
+    .sort((a, b) => a[1].localeCompare(b[1]));
   return (
     <div className="filters" role="search" aria-label="Filter tasks">
       <div className="filter-search">
@@ -219,8 +222,8 @@ export function TaskFilters({ value, onChange, rows, showAssignee = true, showGi
         </Select>
       )}
       {teams.length > 1 && (
-        <Select aria-label="Team" value={value.teamId} onChange={(e) => set('teamId', e.target.value)}>
-          <option value="">Any team</option>
+        <Select aria-label="Department" value={value.teamId} onChange={(e) => set('teamId', e.target.value)}>
+          <option value="">Any department</option>
           {teams.map(([id, name]) => (
             <option key={id} value={id}>
               {name}

@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   assignableUsers,
   canAssignTo,
+  labelDepartments,
   canViewTask,
   canViewUser,
   DEFAULT_ROLE_PERMISSIONS,
@@ -134,5 +135,19 @@ describe('ADR-0011 / D-130: automatic reporting line', () => {
     ];
     assert.equal(seniorOf(people), 9);
     assert.equal(seniorOf(people.filter((x) => x.id !== 9)), 1);
+  });
+});
+
+describe('labelDepartments (ADR-0011)', () => {
+  const d = (id: number, name: string, v: string | null) => ({ id, name, v });
+  const names = (list: ReturnType<typeof d>[]) => labelDepartments(list, (t) => t.v).map((t) => t.name);
+  it('adds the vertical only when the list spans several', () => {
+    assert.deepEqual(names([d(1, 'Sales', 'SA'), d(2, 'Sales', 'SB')]), ['Sales · SA', 'Sales · SB']);
+    assert.deepEqual(names([d(1, 'Sales', 'SA'), d(2, 'Marketing', 'SA')]), ['Sales', 'Marketing']);
+    assert.deepEqual(names([]), []);
+  });
+  it('keeps the shape and leaves a department without a vertical as it is', () => {
+    const out = labelDepartments([d(1, 'Sales', 'SA'), d(2, 'Ops', null)], (t) => t.v);
+    assert.deepEqual(out, [d(1, 'Sales · SA', 'SA'), d(2, 'Ops', null)]);
   });
 });

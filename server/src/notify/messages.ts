@@ -1,3 +1,4 @@
+import { PRE_DEADLINE_WARNING_MINUTES } from '@taskwatch/shared/policy';
 import { config } from '../config.js';
 import { formatHours, LEVEL_LABELS, PRIORITY_LABELS, type Priority } from '../domain.js';
 import type { LevelResult } from '../engine/levels.js';
@@ -36,14 +37,17 @@ export function taskLink(taskId: number): string {
   return `${config.appUrl}/tasks/${taskId}`;
 }
 
-export function assignedMessage(task: TaskInfo, assigner: DirUser, recipient: DirUser, reassigned = false): Message {
+export function assignedMessage(task: TaskInfo, assigner: DirUser, recipient: DirUser, reassigned = false, now?: Date): Message {
   const due = formatInZone(task.dueAt, recipient.timeZone);
+  // ADR-0014: assigned inside the 10-minute warning window, so the assignment notice is the warning.
+  const left = now ? Math.ceil((task.dueAt.getTime() - now.getTime()) / 60_000) : Infinity;
+  const soon = left <= PRE_DEADLINE_WARNING_MINUTES ? ` Due in ${left} min.` : '';
   const priority = PRIORITY_LABELS[task.priority];
   const verb = reassigned ? 'Task reassigned to you' : 'New task';
   return {
     event: reassigned ? 'reassigned' : 'assigned',
     subject: `${verb}: ${task.title}`,
-    text: `${verb} from ${assigner.name}: “${task.title}” (${task.entityName}).\nPriority: ${priority}. Due: ${due}.\n\nPost your first update in TaskWatch — only your updates reset the update clock.`,
+    text: `${verb} from ${assigner.name}: “${task.title}” (${task.entityName}).\nPriority: ${priority}. Due: ${due}.${soon}\n\nPost your first update in TaskWatch — only your updates reset the update clock.`,
     template: 'taskwatch_task_assigned',
     params: [assigner.name, task.title, priority, due],
     taskId: task.id,
@@ -91,7 +95,7 @@ export function escalationMessage(
     params: [tag, task.title, assignee.name, task.entityName, reason],
     taskId: task.id,
     level,
-    quietable: level <= 1,
+    quietable: level === 0 || (level === 1 && task.priority !== 'critical'), // D-147: a Critical L1 is never held
   };
 }
 

@@ -319,16 +319,20 @@ export function ReassignDialog({ task, onClose }: Base) {
   const options = (useApi(['task-assignees'], assigneeOptions).data ?? []).filter((u) => u.id !== task.assigneeId);
   const [toId, setToId] = useState('');
   const [reason, setReason] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [dueTime, setDueTime] = useState('17:00');
+  // D-148: a late task (or one due within 10 minutes) needs a new due time, so the new person is not escalated at once.
+  const late = Date.parse(task.dueAt) <= now() + 10 * 60_000;
   const a = useAction(reassignTask, { success: `${task.id} reassigned`, onSuccess: onClose });
   // The server sends team and load with each option; the prototype computes them from its store.
   const extra = (u: (typeof options)[number] & { teamName?: string | null; openCount?: number }) => {
-    if (BACKEND === 'server') return `${u.teamName ?? 'no team'} (${u.openCount ?? 0} open)`;
+    if (BACKEND === 'server') return `${u.teamName ?? 'no department'} (${u.openCount ?? 0} open)`;
     const db = getDb();
-    return `${db.teams.find((t) => t.id === u.teamId)?.name ?? 'no team'} (${db.tasks.filter((t) => t.assigneeId === u.id && ['assigned', 'in_progress', 'changes_requested', 'reopened'].includes(t.status)).length} open)`;
+    return `${db.teams.find((t) => t.id === u.teamId)?.name ?? 'no department'} (${db.tasks.filter((t) => t.assigneeId === u.id && ['assigned', 'in_progress', 'changes_requested', 'reopened'].includes(t.status)).length} open)`;
   };
   return (
     <Dialog open onClose={onClose} title={`Reassign ${task.id}`} description="History and escalation events stay with the task. The new assignee gets a fresh update window; past-due levels still apply." footer={<Foot onClose={onClose} label="Reassign" pending={a.pending} form="f-reassign" />}>
-      <form id="f-reassign" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id, { toId, reason }))}>
+      <form id="f-reassign" className="stack" noValidate onSubmit={(e) => (e.preventDefault(), a.run(task.id, { toId, reason, ...(dueDate ? { dueDate, dueTime } : {}) }))}>
         <Field label="Current assignee">
           <Input value={task.assignee?.name ?? ''} readOnly disabled />
         </Field>
@@ -345,6 +349,14 @@ export function ReassignDialog({ task, onClose }: Base) {
         <Field label="Reason" required htmlFor="ra-reason" error={a.fields.reason}>
           <Textarea id="ra-reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} invalid={!!a.fields.reason} />
         </Field>
+        <div className="grid-2">
+          <Field label="New due date" required={late} htmlFor="ra-due" error={a.fields.dueDate} hint={late ? 'Required: this task is past due or due within 10 minutes.' : 'Optional. Leave empty to keep the current due time.'}>
+            <Input id="ra-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} invalid={!!a.fields.dueDate} />
+          </Field>
+          <Field label="Due time" htmlFor="ra-due-time">
+            <Input id="ra-due-time" type="time" value={dueTime} onChange={(e) => setDueTime(e.target.value)} disabled={!dueDate} />
+          </Field>
+        </div>
       </form>
     </Dialog>
   );

@@ -77,7 +77,7 @@ export function TaskListPage({ scope }: { scope: TaskScope }) {
   const exportRows = (ids?: string[]) => {
     const list = ids ? filtered.filter((t) => ids.includes(t.id)) : filtered;
     downloadCsv(`taskwatch-${scope}-${new Date().toISOString().slice(0, 10)}.csv`, [
-      ['Task ID', 'Title', 'Priority', 'Status', 'Assignee', 'Task giver', 'Team', 'Due', 'Last update', 'Escalation level', 'Progress %'],
+      ['Task ID', 'Title', 'Priority', 'Status', 'Assignee', 'Task giver', 'Department', 'Due', 'Last update', 'Escalation level', 'Progress %'],
       ...list.map((t) => [t.id, t.title, PRIORITY_LABEL[t.priority], STATUS_LABEL[t.status], t.assignee?.name, t.giver?.name, t.team?.name, t.dueAt, t.lastUpdateAt, t.level >= 0 ? `L${t.level}` : 'On track', t.progress]),
     ]);
   };

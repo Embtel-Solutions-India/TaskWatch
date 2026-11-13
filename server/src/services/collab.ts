@@ -1,5 +1,6 @@
 // Comments and attachments (T-4.10, T-4.11; COLLABORATION-FRD, D-12, D-74, D-31). Comments never touch the clock
 // (WO FR-4). Edits and deletions keep the original text in the append-only activity log; removed files stay stored.
+import { mentionedNames } from '@taskwatch/shared/notifications';
 import { isCoS } from '@taskwatch/shared/permissions';
 import type pg from 'pg';
 import * as clock from '../clock.js';
@@ -31,7 +32,8 @@ export async function addComment(actor: DirUser, taskId: number, input: { body: 
       id = made.id;
       for (const file of input.files ?? []) await storeAttachment(c, { taskId, logId, actor, file, now, context: 'comment', commentId: id, written });
       // Mentions: only people who can see the task; never the author (CMT-01-AC-3).
-      const mentioned = dir.all().filter((u) => u.active && u.id !== actor.id && body.includes(`@${u.name}`) && canView(u, t, dir));
+      const names = mentionedNames(body, dir.all().map((u) => u.name));
+      const mentioned = dir.all().filter((u) => u.active && u.id !== actor.id && names.has(u.name) && canView(u, t, dir));
       for (const u of mentioned) await notifyUser(c, dir, rules, u.id, 'mention', taskId, `${actor.name} mentioned you on “${t.title}”`, body);
       if (t.assignee_id !== actor.id && !mentioned.some((u) => u.id === t.assignee_id)) {
         await notifyUser(c, dir, rules, t.assignee_id, 'comment', taskId, `${actor.name} commented on “${t.title}”`, body);

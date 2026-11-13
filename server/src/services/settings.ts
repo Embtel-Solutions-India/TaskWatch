@@ -15,11 +15,12 @@ import type { DirUser } from './directory.js';
 const STORED = ['timezone', 'workdayStart', 'workdayEnd', 'sessionTimeoutMinutes', 'categories', 'overloadThreshold', 'digestDay', 'digestHour', 'priorityWeights', 'standardTasks'] as const;
 
 export async function getSettings(organizationId: number, db: Db = pool): Promise<Settings> {
-  const { rows } = await db.query<{ name: string; value: Partial<Settings> }>('select name, settings as value from organizations where id = $1', [organizationId]);
+  const { rows } = await db.query<{ name: string; value: Partial<Settings>; google_domains: string[] }>('select name, settings as value, google_domains from organizations where id = $1', [organizationId]);
   return {
     ...DEFAULT_SETTINGS,
     ...rows[0]?.value,
     orgName: rows[0]?.name ?? DEFAULT_SETTINGS.orgName,
+    googleDomains: rows[0]?.google_domains ?? [], // D-135: its own column, read by Google sign-in (D-101)
     retentionYears: DEFAULT_SETTINGS.retentionYears,
     emailSimulation: !config.smtp.enabled,
     whatsappSimulation: !config.whatsapp.enabled,
@@ -79,6 +80,15 @@ export const settingsSchema = z
       )
       .max(500, { error: 'Keep at most 500 standard tasks.' })
       .optional(),
+    // D-135. Left out: the saved list stays.
+    googleDomains: z
+      .array(
+        z.string({ error: 'Give a domain like example.com.' }).trim().toLowerCase().regex(/^(?=.{3,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, { error: 'Give a domain like example.com.' }),
+        { error: 'Give the domains as a list.' },
+      )
+      .max(50, { error: 'Keep at most 50 domains.' })
+      .transform((ds) => [...new Set(ds)])
+      .optional(),
     categories: z
       .array(z.string({ error: 'Keep at least one category.' }).trim().max(40, { error: 'Use at most 40 characters per category.' }), {
         error: 'Keep at least one category.',
@@ -104,15 +114,15 @@ export async function saveSettings(actor: DirUser, input: z.infer<typeof setting
   await tx(async (c) => {
     await c.query('select 1 from organizations where id = $1 for update', [org]);
     const before = await getSettings(org, c);
-    const next = { ...input, priorityWeights: input.priorityWeights ?? before.priorityWeights, standardTasks: input.standardTasks ?? before.standardTasks };
+    const next = { ...input, priorityWeights: input.priorityWeights ?? before.priorityWeights, standardTasks: input.standardTasks ?? before.standardTasks, googleDomains: input.googleDomains ?? before.googleDomains };
     const stored = Object.fromEntries(STORED.filter((k) => !same(next[k], DEFAULT_SETTINGS[k])).map((k) => [k, next[k]]));
     await c
-      .query('update organizations set name = $2, settings = $3 where id = $1', [org, input.orgName, JSON.stringify(stored)])
+      .query('update organizations set name = $2, settings = $3, google_domains = $4 where id = $1', [org, input.orgName, JSON.stringify(stored), next.googleDomains])
       .catch((err: { code?: string; constraint?: string }) => {
         if (err.code === '23505' && err.constraint === 'organizations_name_uq') throw invalid({ orgName: 'Another organization already uses this name.' });
         throw err;
       });
-    const changed = (['orgName', ...STORED] as const).filter((k) => !same(before[k], next[k]));
+    const changed = (['orgName', 'googleDomains', ...STORED] as const).filter((k) => !same(before[k], next[k]));
     if (changed.length) {
       await appendAdmin(c, {
         actorId: actor.id,

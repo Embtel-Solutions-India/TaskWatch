@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { HOUR, LEVEL_LABEL, ORG_WIDE_PERMISSIONS, PERMISSION_HELP, PERMISSION_LABEL, PRIORITY_LABEL, ROLE_LABEL } from '../../constants';
 import { Icon } from '../../components/icons';
-import { Banner, Button, Card, Checkbox, ConfirmDialog, ErrorState, Field, Input, PageHeader, Skeleton, Tag } from '../../components/ui';
-import { useAction, useApi } from '../../hooks';
+import { Banner, Button, Card, Checkbox, ConfirmDialog, ErrorState, Field, Input, PageHeader, Select, Skeleton, Tag } from '../../components/ui';
+import { useAction, useApi, useAuth } from '../../hooks';
+import { PRE_DEADLINE_WARNING_MINUTES, diffPolicy } from '@taskwatch/shared/policy';
+import { assigneeOptions } from '../../services/api/tasks';
 import { BACKEND } from '../../services/http';
 import { WHATSAPP_ENABLED } from '@taskwatch/shared/notifications';
 import { DEFAULT_SETTINGS } from '@taskwatch/shared/settings';
@@ -11,7 +13,7 @@ import type { StandardTask } from '@taskwatch/shared/standardTasks';
 
 /** Mandatory alert channels (D-106: WhatsApp only when switched on). */
 const CHANNELS = WHATSAPP_ENABLED ? 'WhatsApp, email, in-app' : 'Email, in-app';
-import { getPolicies, getRoles, getSettings, resetPolicy, setRolePermissions, setRules, setSettings } from '../../services/api/admin';
+import { applyPolicy, getPolicies, getRoles, getSettings, resetPolicy, setRolePermissions, setRules, setSettings } from '../../services/api/admin';
 import { computeLevel } from '../../services/engine/escalation';
 import type { Permission, Role, RulesConfig, Settings } from '../../types';
 import { PRIORITIES, ROLES } from '../../types';
@@ -143,36 +145,49 @@ export function RolesPage() {
 
 export function PoliciesPage() {
   const q = useApi(['rules'], getPolicies);
-  /** 'default' or an entity id (POL-03). An entity override holds windows and multiples only (D-48). */
+  const auth = useAuth();
+  /** The CoS (manage_escalation_policies) sees every scope; a general manager only their own vertical (D-141, D-150). */
+  const isAdmin = !auth.bootstrap || !!auth.permissions?.includes('manage_escalation_policies');
+  /** 'default' or a vertical id. A vertical stores only the fields it changes; the rest is inherited (ADR-0014, D-142). */
   const [scope, setScope] = useState('default');
-  const [creating, setCreating] = useState(false);
   const [r, setR] = useState<RulesConfig | null>(null);
-  const [confirm, setConfirm] = useState<'save' | 'reset' | null>(null);
+  const [confirm, setConfirm] = useState<'save' | 'reset' | 'apply' | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
   const isDefault = scope === 'default';
-  const base = q.data ? (isDefault ? q.data.defaults : (q.data.overrides[scope] ?? null)) : null;
+  const base = q.data ? (isDefault ? q.data.defaults : (q.data.overrides[scope] ?? q.data.defaults)) : null;
   const save = useAction(setRules, {
-    success: isDefault ? 'Escalation policy saved; all open tasks re-evaluated.' : "Override saved; that vertical's open tasks re-evaluated.",
-    onSuccess: () => (setConfirm(null), setCreating(false)),
+    success: isDefault ? 'Escalation policy saved; new and rescheduled tasks use it.' : 'Vertical policy saved; new and rescheduled tasks use it.',
+    onSuccess: () => (setConfirm(null), setSaved(scope)),
   });
-  const reset = useAction(resetPolicy, { success: 'Override removed; the vertical follows the default policy again.', onSuccess: () => setConfirm(null) });
+  const reset = useAction(resetPolicy, { success: 'The vertical follows the global policy again.', onSuccess: () => (setConfirm(null), setSaved(scope)) });
+  const apply = useAction(applyPolicy, { success: (x) => `${x.updated} open task${x.updated === 1 ? '' : 's'} rescheduled to the current policy.`, onSuccess: () => (setConfirm(null), setSaved(null)) });
+  const peopleQ = useApi(['task-assignees'], assigneeOptions);
   useEffect(() => {
-    if (q.data) setR(structuredClone(scope === 'default' ? q.data.defaults : (q.data.overrides[scope] ?? q.data.defaults)));
-  }, [q.data, scope]);
+    if (q.data && !isAdmin && q.data.headOf[0] && scope === 'default') setScope(q.data.headOf[0]);
+  }, [q.data, isAdmin, scope]);
+  useEffect(() => {
+    if (base) setR(structuredClone(base));
+  }, [q.data, scope]); // eslint-disable-line react-hooks/exhaustive-deps
   if (q.error) return <ErrorState error={q.error} />;
-  if (!r || !q.data) return <Skeleton rows={10} />;
+  if (!r || !q.data || !base) return <Skeleton rows={10} />;
   const f = save.fields;
-  const editable = isDefault || !!base || creating;
-  const dirty = creating || JSON.stringify(r) !== JSON.stringify(base ?? q.data.defaults);
+  const editable = isDefault ? isAdmin : true;
+  const dirty = JSON.stringify(r) !== JSON.stringify(base);
   const num = (v: string) => Number(v);
-  const discard = () => (setR(structuredClone(base ?? q.data!.defaults)), setCreating(false));
+  const discard = () => setR(structuredClone(base));
+  /** A vertical field that differs from the global policy (ADR-0014: "Custom", else "Inherited"). */
+  const custom = (a: unknown, b: unknown) => !isDefault && JSON.stringify(a) !== JSON.stringify(b);
+  const g = q.data.defaults;
+  const people = (peopleQ.data ?? []).filter((u) => u.entityId === scope);
+  const history = q.data.history.filter((h) => h.target === scope);
   return (
     <div className="page">
       <PageHeader
         title="Escalation Policies"
-        description="Update windows and thresholds that drive the escalation ladder. Changes apply to every open task immediately and are audited."
+        description="Deadline escalation, update windows and recipients. Changes are versioned and audited; open tasks keep their schedule unless you apply the change to them."
         actions={
           <>
-            {!isDefault && base && (
+            {!isDefault && q.data.stored[scope] && (
               <Button variant="ghost" onClick={() => setConfirm('reset')}>
                 Reset to default
               </Button>
@@ -181,30 +196,84 @@ export function PoliciesPage() {
               Discard
             </Button>
             <Button variant="primary" disabled={!dirty || !editable} onClick={() => setConfirm('save')}>
-              {isDefault ? 'Save policy' : 'Save override'}
+              {isDefault ? 'Save policy' : 'Save vertical policy'}
             </Button>
           </>
         }
       />
-      {q.data.entities.length > 0 && (
-        <Field label="Policy for" htmlFor="pol-scope" hint="Each vertical follows the default policy unless it has its own update windows and multiples.">
-          <select id="pol-scope" className="input select" value={scope} onChange={(e) => (setScope(e.target.value), setCreating(false))}>
-            <option value="default">Default (every vertical)</option>
+      {isAdmin && q.data.entities.length > 0 && (
+        <Field label="Policy for" htmlFor="pol-scope" hint="Each vertical follows the global policy except for the fields it changes.">
+          <select id="pol-scope" className="input select" value={scope} onChange={(e) => (setScope(e.target.value), setSaved(null))}>
+            <option value="default">Global (every vertical)</option>
             {q.data.entities.map((e) => (
               <option key={e.id} value={e.id}>
                 {e.name}
-                {q.data!.overrides[e.id] ? ' (override)' : ''}
+                {q.data!.stored[e.id] && Object.keys(q.data!.stored[e.id]!).length ? ' (customised)' : ''}
               </option>
             ))}
           </select>
         </Field>
       )}
-      {!isDefault && !editable && (
-        <Banner tone="info" action={<Button size="sm" onClick={() => setCreating(true)}>Create override</Button>}>
-          This vertical follows the default policy.
+      {!isDefault && (
+        <Banner tone="info">
+          {q.data.entities.find((e) => e.id === scope)?.name ?? scope}: fields marked Custom apply to this vertical only; everything else follows the global policy. Quiet hours, acknowledgement and the CEO on L3 are organization-wide.
         </Banner>
       )}
-      {!isDefault && editable && <Banner tone="info">Only update windows and level multiples can differ per vertical. Past-due floors, acknowledgement, quiet hours and routing come from the default policy.</Banner>}
+      {saved === scope && (
+        <Banner tone="info" action={<Button size="sm" onClick={() => setConfirm('apply')}>Apply to open tasks</Button>}>
+          Open tasks keep the schedule they were given. New, rescheduled and reassigned tasks use this policy.
+        </Banner>
+      )}
+      <Card title="Deadline escalation" sub={`L1 reaches the team lead at the due time if the task is not submitted. A warning goes to the assignee ${PRE_DEADLINE_WARNING_MINUTES} minutes before (system-controlled).`}>
+        <div className="table-scroll">
+          <table className="table policy">
+            <caption className="sr-only">Deadline escalation by priority</caption>
+            <thead>
+              <tr>
+                <th>Priority</th>
+                <th>L1 Team lead</th>
+                <th>L2 Manager, after due</th>
+                <th>L3 Founder's Office, after due</th>
+                <th>Reviewer deadline</th>
+              </tr>
+            </thead>
+            <tbody>
+              {PRIORITIES.map((p) => {
+                const d = r.deadlineDelaysMinutes[p];
+                const setD = (i: 0 | 1, v: number) => setR({ ...r, deadlineDelaysMinutes: { ...r.deadlineDelaysMinutes, [p]: (i === 0 ? [v, d[1]] : [d[0], v]) as [number, number] } });
+                return (
+                  <tr key={p}>
+                    <th scope="row">
+                      {PRIORITY_LABEL[p]} {custom(d, g.deadlineDelaysMinutes[p]) || custom(r.reviewSlaMinutes[p], g.reviewSlaMinutes[p]) ? <Tag tone="info">Custom</Tag> : null}
+                    </th>
+                    <td className="muted">At due time</td>
+                    {([0, 1] as const).map((i) => (
+                      <td key={i}>
+                        <DurationInput minutes={d[i]} disabled={!editable} label={`${PRIORITY_LABEL[p]} L${i + 2} after due`} invalid={!!f[`d_${p}`]} onChange={(v) => setD(i, v)} />
+                      </td>
+                    ))}
+                    <td>
+                      <DurationInput minutes={r.reviewSlaMinutes[p]} disabled={!editable} label={`${PRIORITY_LABEL[p]} reviewer deadline`} invalid={!!f[`sla_${p}`]} onChange={(v) => setR({ ...r, reviewSlaMinutes: { ...r.reviewSlaMinutes, [p]: v } })} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {PRIORITIES.map((p) => (f[`d_${p}`] || f[`sla_${p}`] ? <span key={p} className="field-msg">{PRIORITY_LABEL[p]}: {f[`d_${p}`] ?? f[`sla_${p}`]}</span> : null))}
+        {!isDefault && editable && (() => {
+          const differs = custom(r.deadlineDelaysMinutes, g.deadlineDelaysMinutes) || custom(r.reviewSlaMinutes, g.reviewSlaMinutes);
+          return (
+            <div className="policy-foot">
+              <span className="muted small">{differs ? 'Some values here differ from the global policy.' : 'These values match the global policy.'}</span>
+              <Button size="sm" icon="refresh" disabled={!differs} onClick={() => setR({ ...r, deadlineDelaysMinutes: structuredClone(g.deadlineDelaysMinutes), reviewSlaMinutes: structuredClone(g.reviewSlaMinutes) })}>
+                Reset to global values
+              </Button>
+            </div>
+          );
+        })()}
+      </Card>
       <Card title="Resulting ladder" sub="Silence thresholds = update window × level multiple">
         <div className="table-scroll">
           <table className="table policy">
@@ -232,21 +301,13 @@ export function PoliciesPage() {
                   ))}
                 </tr>
               ))}
-              <tr>
-                <th scope="row">Any, past due</th>
-                <td className="muted">—</td>
-                <td className="muted">—</td>
-                {r.overdueOffsetsHours.map((o, i) => (
-                  <td key={i}>
-                    <span className={cx('lvl', `lvl-${i + 1}`)}>{o === 0 ? 'at due time' : `due +${o} h`}</span>
-                  </td>
-                ))}
-              </tr>
             </tbody>
           </table>
         </div>
       </Card>
       <div className="grid-2">
+        {/* D-155: multiples, extra recipients and the simulator are for the CoS; a GM sees deadlines, windows and history. */}
+        {isAdmin && (
         <Card title="Level multiples" sub="Applied to each priority's update window">
           <div className="grid-4">
             {r.multiples.map((m, k) => (
@@ -257,18 +318,33 @@ export function PoliciesPage() {
           </div>
           {f.multiples && <span className="field-msg">{f.multiples}</span>}
         </Card>
+        )}
+        {isAdmin && !isDefault && (
+          <Card title="Extra recipients" sub="Copied on each level in addition to the reporting line. People of this vertical only.">
+            {(['l1', 'l2', 'l3'] as const).map((k, i) => (
+              <fieldset key={k} className="assign-also">
+                <legend>
+                  {LEVEL_LABEL[i + 1]} {custom(r.extraRecipients[k], g.extraRecipients[k]) ? <Tag tone="info">Custom</Tag> : null}
+                </legend>
+                <div className="assign-also-list">
+                  {people.map((u) => (
+                    <Checkbox
+                      key={u.id}
+                      label={u.name}
+                      disabled={!editable}
+                      checked={r.extraRecipients[k].includes(Number(u.id))}
+                      onChange={(e) => setR({ ...r, extraRecipients: { ...r.extraRecipients, [k]: e.target.checked ? [...r.extraRecipients[k], Number(u.id)] : r.extraRecipients[k].filter((x) => x !== Number(u.id)) } })}
+                    />
+                  ))}
+                  {!people.length && <span className="muted small">No people in this vertical are listed for you.</span>}
+                </div>
+                {f[`rcpt_${k}`] && <span className="field-msg">{f[`rcpt_${k}`]}</span>}
+              </fieldset>
+            ))}
+          </Card>
+        )}
         {isDefault && (
         <>
-        <Card title="Past-due floors" sub="Minimum level once a task passes its due time">
-          <div className="grid-3">
-            {r.overdueOffsetsHours.map((o, i) => (
-              <Field key={i} label={`L${i + 1} at due +`} htmlFor={`off-${i}`} hint="hours">
-                <Input id={`off-${i}`} type="number" min={0} value={o} onChange={(e) => setR({ ...r, overdueOffsetsHours: r.overdueOffsetsHours.map((x, j) => (j === i ? num(e.target.value) : x)) as RulesConfig['overdueOffsetsHours'] })} />
-              </Field>
-            ))}
-          </div>
-          {f.offsets && <span className="field-msg">{f.offsets}</span>}
-        </Card>
         <Card title="Acknowledgement & reminders">
           <div className="grid-2">
             <Field label="Acknowledgement snooze" htmlFor="snooze" hint="Repeat notifications pause for this long. Clocks keep running." error={f.ackSnoozeHours}>
@@ -312,14 +388,59 @@ export function PoliciesPage() {
         <Checkbox label="L3 also goes to the CEO (decision D7)" hint="When off, L3 goes to the Chief of Staff only." checked={r.l3NotifyCeo} onChange={(e) => setR({ ...r, l3NotifyCeo: e.target.checked })} />
       </Card>
       )}
-      <PolicySimulator rules={r} />
-      <ConfirmDialog open={confirm === 'save'} onClose={() => setConfirm(null)} onConfirm={() => save.run(r, scope)} title={isDefault ? 'Apply new escalation policy?' : 'Apply this override?'} confirmLabel="Apply policy" loading={save.pending}>
-        <p>{isDefault ? 'Every open task' : "Every open task in this vertical"} is re-evaluated immediately. Tasks may escalate (or stop escalating) as a result. Existing escalation history is never altered.</p>
+      {isAdmin && <PolicySimulator rules={r} />}
+      {!isDefault && (
+        <Card title="Change history" sub="Every saved version of this vertical's policy.">
+          {history.length ? (
+            <ul className="plain-list">
+              {history.map((h) => (
+                <li key={h.id}>
+                  <strong>{h.version != null ? `v${h.version}` : h.after === null ? 'Reset to global' : 'Applied to open tasks'}</strong> · {h.actor ?? 'System'} · {new Date(h.at).toLocaleString()}
+                  {h.note ? <span className="muted"> — {h.note}</span> : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No changes yet: this vertical follows the global policy.</p>
+          )}
+        </Card>
+      )}
+      <ConfirmDialog open={confirm === 'save'} onClose={() => setConfirm(null)} onConfirm={() => save.run(isDefault ? r : (diffPolicy(r, g) as Partial<RulesConfig>), scope)} title={isDefault ? 'Save the global policy?' : 'Save this vertical policy?'} confirmLabel="Save" loading={save.pending}>
+        <p>New, rescheduled and reassigned tasks use it. Open tasks keep their escalation times until you apply the change to them. Update windows apply at once. Existing escalation history is never altered.</p>
       </ConfirmDialog>
-      <ConfirmDialog open={confirm === 'reset'} onClose={() => setConfirm(null)} onConfirm={() => reset.run(scope)} title="Remove this override?" confirmLabel="Follow the default" loading={reset.pending}>
-        <p>The vertical's open tasks follow the default policy again and are re-evaluated immediately.</p>
+      <ConfirmDialog open={confirm === 'reset'} onClose={() => setConfirm(null)} onConfirm={() => reset.run(scope)} title="Follow the global policy?" confirmLabel="Follow the global policy" loading={reset.pending}>
+        <p>Every custom field of this vertical is removed. Open tasks keep their escalation times until you apply the change to them.</p>
+      </ConfirmDialog>
+      <ConfirmDialog open={confirm === 'apply'} onClose={() => setConfirm(null)} onConfirm={() => apply.run(scope)} title="Apply to open tasks?" confirmLabel="Apply" loading={apply.pending}>
+        <p>Every open task {isDefault ? '' : 'in this vertical '}gets new L2 and L3 times from the policy as it now stands, and may escalate at once. This is recorded in the audit log.</p>
       </ConfirmDialog>
     </div>
+  );
+}
+
+/** "30 min", "2 h", "1 d 2 h". */
+function minutesLabel(m: number): string {
+  if (!(m > 0)) return '—';
+  const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60;
+  return [d && `${d} d`, h && `${h} h`, mm && `${mm} min`].filter(Boolean).join(' ');
+}
+
+/**
+ * A duration typed in minutes or hours (the dropdown); the value is always minutes. Whole hours open in hours.
+ * Changing the unit keeps the duration and only re-expresses the number.
+ */
+function DurationInput({ minutes, onChange, label, disabled, invalid }: { minutes: number; onChange: (minutes: number) => void; label: string; disabled?: boolean; invalid?: boolean }) {
+  const [unit, setUnit] = useState<'min' | 'h'>(minutes >= 60 && minutes % 60 === 0 ? 'h' : 'min');
+  const per = unit === 'h' ? 60 : 1;
+  return (
+    <span className="duration-input">
+      <Input type="number" min={unit === 'h' ? 0.5 : 5} step={unit === 'h' ? 0.5 : 5} disabled={disabled} aria-label={`${label} (${unit === 'h' ? 'hours' : 'minutes'})`} className="input-sm num" value={Number.isFinite(minutes) ? +(minutes / per).toFixed(2) : ''} onChange={(e) => onChange(Math.round(Number(e.target.value) * per))} invalid={invalid} />
+      <Select aria-label={`${label} unit`} className="input-sm" disabled={disabled} value={unit} onChange={(e) => setUnit(e.target.value as 'min' | 'h')}>
+        <option value="min">min</option>
+        <option value="h">h</option>
+      </Select>
+      <span className="muted small">({minutesLabel(minutes)})</span>
+    </span>
   );
 }
 
@@ -350,16 +471,49 @@ function PolicySimulator({ rules }: { rules: RulesConfig }) {
       </div>
       <p className="sim-result">
         Result: <span className={cx('lvl', res.level < 0 ? 'lvl-ok' : `lvl-${res.level}`)}>{res.level < 0 ? 'On track' : LEVEL_LABEL[res.level]}</span>
-        {res.level >= 0 && <span className="muted"> from {res.reason === 'overdue' ? 'the past-due rule' : 'the silence rule'} (silence L{res.silenceLevel < 0 ? '–' : res.silenceLevel}, past-due L{res.overdueLevel < 0 ? '–' : res.overdueLevel}; highest wins)</span>}
+        {res.level >= 0 && <span className="muted"> from {res.reason === 'overdue' ? 'the deadline rule' : 'the silence rule'} (silence L{res.silenceLevel < 0 ? '–' : res.silenceLevel}, deadline L{res.overdueLevel < 0 ? '–' : res.overdueLevel}; highest wins)</span>}
       </p>
     </Card>
+  );
+}
+
+/** A removable tag list with an Add box (Google sign-in domains). */
+function TagList({ items, noun, placeholder, normalize = (v) => v, error, onChange }: { items: string[]; noun: string; placeholder?: string; normalize?: (v: string) => string; error?: string; onChange: (items: string[]) => void }) {
+  const [draft, setDraft] = useState('');
+  return (
+    <>
+      <div className="tag-cloud mb">
+        {items.map((c) => (
+          <span key={c} className="tag removable">
+            {c}
+            <button type="button" aria-label={`Remove ${c}`} onClick={() => onChange(items.filter((x) => x !== c))}>
+              <Icon name="x" size={11} />
+            </button>
+          </span>
+        ))}
+      </div>
+      <form
+        className="row-gap"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const v = normalize(draft.trim());
+          if (v && !items.includes(v)) onChange([...items, v]);
+          setDraft('');
+        }}
+      >
+        <Input aria-label={`New ${noun}`} placeholder={placeholder ?? `Add ${noun}`} value={draft} onChange={(e) => setDraft(e.target.value)} className="input-sm" />
+        <Button size="sm" type="submit">
+          Add
+        </Button>
+      </form>
+      {error && <span className="field-msg">{error}</span>}
+    </>
   );
 }
 
 export function SettingsPage() {
   const q = useApi(['settings'], getSettings);
   const [s, setS] = useState<Settings | null>(null);
-  const [cat, setCat] = useState('');
   const save = useAction(setSettings, { success: 'Settings saved' });
   useEffect(() => {
     if (q.data) setS(structuredClone(q.data));
@@ -439,32 +593,11 @@ export function SettingsPage() {
         </div>
       </Card>
       <StandardTasksCard rows={s.standardTasks ?? DEFAULT_SETTINGS.standardTasks} errors={f} onChange={(standardTasks) => setS({ ...s, standardTasks })} />
-      <Card title="Task categories">
-        <div className="tag-cloud mb">
-          {s.categories.map((c) => (
-            <span key={c} className="tag removable">
-              {c}
-              <button type="button" aria-label={`Remove ${c}`} onClick={() => setS({ ...s, categories: s.categories.filter((x) => x !== c) })}>
-                <Icon name="x" size={11} />
-              </button>
-            </span>
-          ))}
-        </div>
-        <form
-          className="row-gap"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (cat.trim() && !s.categories.includes(cat.trim())) setS({ ...s, categories: [...s.categories, cat.trim()] });
-            setCat('');
-          }}
-        >
-          <Input aria-label="New category" placeholder="Add category" value={cat} onChange={(e) => setCat(e.target.value)} className="input-sm" />
-          <Button size="sm" type="submit">
-            Add
-          </Button>
-        </form>
-        {f.categories && <span className="field-msg">{f.categories}</span>}
-      </Card>
+      {BACKEND === 'server' && (
+        <Card title="Google sign-in domains" sub="People whose email is on one of these domains may sign in with Google (they must also be in the directory). Add a new vertical's domain here. With none listed, the server's default list applies.">
+          <TagList items={s.googleDomains ?? []} noun="domain" placeholder="example.com" normalize={(d) => d.toLowerCase().replace(/^@/, '')} error={f.googleDomains ?? Object.entries(f).find(([k]) => k.startsWith('googleDomains.'))?.[1]} onChange={(googleDomains) => setS({ ...s, googleDomains })} />
+        </Card>
+      )}
       <Card title="Data retention">
         <p>
           Audit records are kept for <strong>{s.retentionYears} years</strong> (policy requirement; not editable).

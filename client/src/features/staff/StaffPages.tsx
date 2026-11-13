@@ -3,12 +3,12 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { LEVEL_LABEL, ROLE_LABEL, ROLE_RANK, PERMISSION_LABEL } from '../../constants';
 import { DataTable } from '../../components/DataTable';
 import { Avatar, Banner, Button, Card, Checkbox, ConfirmDialog, Dialog, ErrorState, Field, Input, KV, LevelBadge, Menu, PageHeader, RoleBadge, Select, Skeleton, Stat, StatusBadge, TabPanel, Tabs, Tag, useToast } from '../../components/ui';
-import { useAction, useApi, useCan, useMe } from '../../hooks';
-import { createStaff, getOrg, getRoles, getStaffProfile, listStaff, resetAccess, setStaffStatus, updateStaff, type OrgData, type StaffInput, type StaffRow } from '../../services/api/admin';
+import { useAction, useApi, useAuth, useCan, useMe } from '../../hooks';
+import { createStaff, getOrg, getRoles, getStaffProfile, listStaff, resetAccess, sendOnboarding, setStaffStatus, updateStaff, type OrgData, type StaffInput, type StaffRow } from '../../services/api/admin';
 import { primaryRole } from '../../services/api/adminServer';
 import { BACKEND } from '../../services/http';
 import { WHATSAPP_ENABLED } from '@taskwatch/shared/notifications';
-import { needsManager } from '@taskwatch/shared/permissions';
+import { labelDepartments, needsManager } from '@taskwatch/shared/permissions';
 import { wouldCreateLoop } from '../../services/authz/permissions';
 import type { Role, User } from '../../types';
 import { PERMISSIONS, ROLES } from '../../types';
@@ -18,6 +18,8 @@ import { DueCell, TaskTitle } from '../tasks/shared';
 export function StaffDirectoryPage() {
   const nav = useNavigate();
   const q = useApi(['staff'], listStaff);
+  const gmOf = useGmVerticals();
+  const me = useMe();
   const [query, setQuery] = useState('');
   const [role, setRole] = useState('');
   const [team, setTeam] = useState('');
@@ -32,14 +34,23 @@ export function StaffDirectoryPage() {
   const reset = useAction(resetAccess, {
     onSuccess: () => toast({ tone: 'info', text: BACKEND === 'server' ? 'A password reset link was emailed. Their sessions were ended.' : 'Simulated: a password reset link was issued. No email was sent.' }),
   });
+  // D-172: offered right after Add staff, and from each active person's Actions menu.
+  const [welcome, setWelcome] = useState<{ id: string; name: string } | null>(null);
+  const onboard = useAction(sendOnboarding, {
+    success: BACKEND === 'server' ? 'Onboarding email sent.' : 'Simulated: no email was sent.',
+    onSuccess: () => setWelcome(null),
+  });
   const org = useApi(['org'], getOrg);
+  // ADR-0011: "Sales · BAIS" when departments of several verticals are listed.
+  const depts = labelDepartments(org.data?.teams ?? [], (t) => t.departmentId);
+  const deptName = (id: string | null) => depts.find((t) => t.id === id)?.name ?? null;
   const rows = useMemo(
     () =>
       (q.data ?? []).filter((u) => {
         const s = query.toLowerCase();
-        return (!s || u.name.toLowerCase().includes(s) || u.email.includes(s) || u.title.toLowerCase().includes(s)) && (!role || u.roles.includes(role as Role)) && (!team || (team === 'none' ? !u.teamId : u.teamId === team)) && (!status || u.status === status || (status === 'nomanager' && needsManager(u)));
+        return (!gmOf || gmOf.includes(u.entityId)) && (!s || u.name.toLowerCase().includes(s) || u.email.includes(s) || u.title.toLowerCase().includes(s)) && (!role || u.roles.includes(role as Role)) && (!team || (team === 'none' ? !u.teamId : u.teamId === team)) && (!status || u.status === status || (status === 'nomanager' && needsManager(u)));
       }),
-    [q.data, query, role, team, status],
+    [q.data, query, role, team, status, gmOf],
   );
   if (q.error) return <ErrorState error={q.error} />;
   const all = q.data ?? [];
@@ -50,7 +61,7 @@ export function StaffDirectoryPage() {
         description="Create and manage staff accounts, roles and reporting relationships."
         actions={
           <>
-            <Button icon="download" onClick={() => downloadCsv('taskwatch-staff.csv', [['Name', 'Email', 'Title', 'Role', 'Manager', 'Team', 'Status', 'Joined', 'Open tasks', 'Overdue tasks'], ...rows.map((u) => [u.name, u.email, u.title, ROLE_LABEL[u.role], u.managerName, u.teamName, u.status, u.joinedAt.slice(0, 10), u.openTasks, u.overdueTasks])])}>
+            <Button icon="download" onClick={() => downloadCsv('taskwatch-staff.csv', [['Name', 'Email', 'Title', 'Role', 'Manager', 'Department', 'Status', 'Joined', 'Open tasks', 'Overdue tasks'], ...rows.map((u) => [u.name, u.email, u.title, ROLE_LABEL[u.role], u.managerName, u.teamName, u.status, u.joinedAt.slice(0, 10), u.openTasks, u.overdueTasks])])}>
               Export CSV
             </Button>
             <Button variant="primary" icon="plus" onClick={() => setEditing('new')}>
@@ -87,9 +98,9 @@ export function StaffDirectoryPage() {
               ))}
             </Select>
             <Select aria-label="Department" value={team} onChange={(e) => setTeam(e.target.value)}>
-              <option value="">Any team</option>
-              <option value="none">No team</option>
-              {(org.data?.teams ?? []).map((t) => (
+              <option value="">Any department</option>
+              <option value="none">No department</option>
+              {depts.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>
@@ -105,10 +116,22 @@ export function StaffDirectoryPage() {
         }
         columns={[
           { id: 'name', header: 'Name', fixed: true, cell: (u) => <span className="person"><Avatar name={u.name} size={26} inactive={u.status !== 'active'} /><span className="task-title"><Link to={`/admin/staff/${u.id}`} className="task-link">{u.name}</Link><span className="task-sub">{u.title}</span></span></span>, sort: (u) => u.name },
-          { id: 'email', header: 'Email', cell: (u) => u.email, sort: (u) => u.email },
+          {
+            id: 'email',
+            header: 'Email',
+            cell: (u) =>
+              u.signIn === 'google' || u.signIn === 'both' ? (
+                <span title={u.signIn === 'google' ? 'Signs in with Google: no password needed' : 'Signs in with Google or their existing password'}>
+                  {u.email} <Tag tone="info">{u.signIn === 'google' ? 'Google' : 'Google + password'}</Tag>
+                </span>
+              ) : (
+                u.email
+              ),
+            sort: (u) => u.email,
+          },
           { id: 'role', header: 'Role', cell: (u) => <RoleBadge role={u.role} />, sort: (u) => -ROLE_RANK[u.role] },
           { id: 'manager', header: 'Manager', cell: (u) => u.managerName ?? (u.role === 'cos' ? '—' : <Tag tone="warn">None</Tag>), sort: (u) => u.managerName ?? '' },
-          { id: 'team', header: 'Team', cell: (u) => u.teamName ?? '—', sort: (u) => u.teamName ?? '' },
+          { id: 'team', header: 'Department', cell: (u) => deptName(u.teamId) ?? u.teamName ?? '—', sort: (u) => deptName(u.teamId) ?? u.teamName ?? '' },
           { id: 'status', header: 'Status', cell: (u) => <Tag tone={u.status === 'active' ? 'ok' : 'muted'}>{u.status === 'active' ? 'Active' : 'Inactive'}</Tag>, sort: (u) => u.status },
           { id: 'joined', header: 'Joined', defaultHidden: true, cell: (u) => formatDate(u.joinedAt), sort: (u) => u.joinedAt },
           { id: 'open', header: 'Assigned', align: 'right', cell: (u) => u.openTasks, sort: (u) => u.openTasks },
@@ -123,15 +146,20 @@ export function StaffDirectoryPage() {
                 items={[
                   { label: 'View profile', icon: 'user', onClick: () => nav(`/admin/staff/${u.id}`) },
                   { label: 'Edit', icon: 'edit', onClick: () => setEditing(u) },
-                  { label: BACKEND === 'server' ? 'Send password reset' : 'Send password reset (simulated)', icon: 'key', onClick: () => reset.run(u.id) },
-                  { label: u.status === 'active' ? 'Deactivate' : 'Reactivate', icon: u.status === 'active' ? 'lock' : 'check', danger: u.status === 'active', onClick: () => setToggling(u) },
+                  // Google-only (no password set) has nothing to reset; someone with a password keeps the option (2026-11-12).
+                  u.signIn === 'google' || (gmOf && u.id === me.id) ? null : { label: BACKEND === 'server' ? 'Send password reset' : 'Send password reset (simulated)', icon: 'key', onClick: () => reset.run(u.id) },
+                  u.status !== 'active' || (gmOf && u.id === me.id) ? null : { label: 'Send onboarding email', icon: 'send', onClick: () => setWelcome(u) },
+                  gmOf && u.id === me.id ? null : { label: u.status === 'active' ? 'Deactivate' : 'Reactivate', icon: u.status === 'active' ? 'lock' : 'check', danger: u.status === 'active', onClick: () => setToggling(u) },
                 ]}
               />
             ),
           },
         ]}
       />
-      {editing && <StaffDialog row={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
+      {editing && <StaffDialog row={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onCreated={setWelcome} />}
+      <ConfirmDialog open={!!welcome} onClose={() => setWelcome(null)} onConfirm={() => onboard.run(welcome!.id)} title={`Send ${welcome?.name} their onboarding email?`} confirmLabel="Send onboarding email" loading={onboard.pending}>
+        They get a welcome email with a link to set their password (valid 7 days). People who sign in with Google get the welcome only. You can send it later from Actions.
+      </ConfirmDialog>
       <ConfirmDialog
         open={!!toggling}
         onClose={() => setToggling(null)}
@@ -158,16 +186,18 @@ export function StaffDirectoryPage() {
 const rolesOf = (u: User): Role[] => (u as Partial<StaffRow>).roles ?? [u.role];
 const sameRoles = (a: readonly Role[], b: readonly Role[]) => [...a].sort().join() === [...b].sort().join();
 
-export function StaffDialog({ row, onClose }: { row: User | null; onClose: () => void }) {
+export function StaffDialog({ row, onClose, onCreated }: { row: User | null; onClose: () => void; onCreated?: (u: User) => void }) {
   const org = useApi(['org'], getOrg);
   if (org.error) return <Dialog open onClose={onClose} title={row ? `Edit ${row.name}` : 'Add staff'}><ErrorState error={org.error} /></Dialog>;
   if (!org.data) return <Dialog open onClose={onClose} title={row ? `Edit ${row.name}` : 'Add staff'}><Skeleton rows={6} /></Dialog>;
-  return <StaffForm row={row} org={org.data} onClose={onClose} />;
+  return <StaffForm row={row} org={org.data} onClose={onClose} onCreated={onCreated} />;
 }
 
-function StaffForm({ row, org, onClose }: { row: User | null; org: OrgData; onClose: () => void }) {
+function StaffForm({ row, org, onClose, onCreated }: { row: User | null; org: OrgData; onClose: () => void; onCreated?: (u: User) => void }) {
   const me = useMe();
-  const canRoles = useCan('manage_roles');
+  const gmOf = useGmVerticals();
+  const canRoles = useCan('manage_roles') || !!gmOf;
+  const roleChoices = gmOf ? ROLES.filter((r) => r === 'staff' || r === 'lead' || r === 'manager') : ROLES;
   const [f, setF] = useState<StaffInput>(
     row
       ? { name: row.name, email: row.email, title: row.title, roles: rolesOf(row), entityId: (row as Partial<StaffRow>).entityId ?? '', managerId: row.managerId, teamId: row.teamId, location: row.location, phone: row.phone, whatsapp: row.whatsapp ?? '', whatsappOptIn: row.whatsappOptIn, timezone: row.timezone, quietStart: row.quietStart ?? '', quietEnd: row.quietEnd ?? '' }
@@ -175,14 +205,14 @@ function StaffForm({ row, org, onClose }: { row: User | null; org: OrgData; onCl
   );
   const [confirmRole, setConfirmRole] = useState(false);
   const set = <K extends keyof StaffInput>(k: K, v: StaffInput[K]) => setF((x) => ({ ...x, [k]: v }));
-  const create = useAction(createStaff, { success: (u) => `${u.name} added`, onSuccess: onClose });
+  const create = useAction(createStaff, { success: (u) => `${u.name} added`, onSuccess: (u) => (onClose(), onCreated?.(u)) });
   const update = useAction(updateStaff, { success: 'Staff details saved', onSuccess: onClose });
   const fields = { ...create.fields, ...update.fields };
   const primary = primaryRole(f.roles);
   const roleChanged = !!row && !sameRoles(rolesOf(row), f.roles);
   const toggleRole = (r: Role, on: boolean) => set('roles', on ? ROLES.filter((x) => x === r || f.roles.includes(x)) : f.roles.filter((x) => x !== r));
   const managers = org.users.filter((u) => u.status === 'active' && u.id !== row?.id && ROLE_RANK[u.role] > ROLE_RANK[primary] && (!row || !wouldCreateLoop(org, row.id, u.id)));
-  const teams = org.teams.filter((t) => !f.entityId || t.departmentId === f.entityId);
+  const teams = labelDepartments(org.teams.filter((t) => !f.entityId || t.departmentId === f.entityId), (t) => t.departmentId);
   const submit = () => {
     if (roleChanged && !confirmRole) return setConfirmRole(true);
     setConfirmRole(false);
@@ -219,7 +249,7 @@ function StaffForm({ row, org, onClose }: { row: User | null; org: OrgData; onCl
             </Field>
             <Field label="Roles" required htmlFor="sf-role-staff" error={fields.roles} hint={!canRoles ? 'Changing roles requires the Manage roles permission.' : row?.id === me.id ? "You can't change your own role." : 'Anyone may hold a second role; permissions are combined.'}>
               <div className="row-gap" role="group" aria-label="Roles">
-                {ROLES.map((r) => (
+                {roleChoices.map((r) => (
                   <Checkbox key={r} id={`sf-role-${r}`} label={ROLE_LABEL[r]} checked={f.roles.includes(r)} onChange={(e) => toggleRole(r, e.target.checked)} disabled={rolesLocked} />
                 ))}
               </div>
@@ -227,7 +257,7 @@ function StaffForm({ row, org, onClose }: { row: User | null; org: OrgData; onCl
             <Field label="Vertical" required htmlFor="sf-entity" error={fields.entityId}>
               <Select id="sf-entity" value={f.entityId} onChange={(e) => setF((x) => ({ ...x, entityId: e.target.value, teamId: null }))} invalid={!!fields.entityId}>
                 <option value="">Choose a vertical</option>
-                {org.departments.map((d) => (
+                {org.departments.filter((d) => !gmOf || gmOf.includes(d.id)).map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.name}
                   </option>
@@ -252,7 +282,7 @@ function StaffForm({ row, org, onClose }: { row: User | null; org: OrgData; onCl
             )}
             <Field label="Department" htmlFor="sf-team" error={fields.teamId}>
               <Select id="sf-team" value={f.teamId ?? ''} onChange={(e) => set('teamId', e.target.value || null)} invalid={!!fields.teamId}>
-                <option value="">No team</option>
+                <option value="">No department</option>
                 {teams.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
@@ -271,22 +301,16 @@ function StaffForm({ row, org, onClose }: { row: User | null; org: OrgData; onCl
               <Input id="sf-wa" type="tel" value={f.whatsapp} onChange={(e) => set('whatsapp', e.target.value)} invalid={!!fields.whatsapp} />
             </Field>
             )}
-            <Field label="Time zone" htmlFor="sf-tz" error={fields.timezone} hint="Quiet hours apply in this zone.">
-              <Select id="sf-tz" value={f.timezone} onChange={(e) => set('timezone', e.target.value)}>
-                {['America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Asia/Kolkata'].map((z) => (
-                  <option key={z}>{z}</option>
-                ))}
-              </Select>
-            </Field>
-            {BACKEND === 'server' && (
-              <>
-                <Field label="Own quiet hours from" htmlFor="sf-qs" error={fields.quietStart} hint="Optional. For night shifts, e.g. 08:00 to 20:00. Empty = the organization's quiet hours.">
-                  <Input id="sf-qs" type="time" value={f.quietStart ?? ''} onChange={(e) => set('quietStart', e.target.value)} invalid={!!fields.quietStart} />
-                </Field>
-                <Field label="Own quiet hours to" htmlFor="sf-qe" error={fields.quietEnd}>
-                  <Input id="sf-qe" type="time" value={f.quietEnd ?? ''} onChange={(e) => set('quietEnd', e.target.value)} invalid={!!fields.quietEnd} />
-                </Field>
-              </>
+            {BACKEND === 'server' ? (
+              <p className="muted small">Time zone, quiet hours and working days follow the vertical (set on Verticals, ADR-0015).</p>
+            ) : (
+              <Field label="Time zone" htmlFor="sf-tz" error={fields.timezone} hint="Quiet hours apply in this zone.">
+                <Select id="sf-tz" value={f.timezone} onChange={(e) => set('timezone', e.target.value)}>
+                  {['America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Asia/Kolkata'].map((z) => (
+                    <option key={z}>{z}</option>
+                  ))}
+                </Select>
+              </Field>
             )}
           </div>
           {WHATSAPP_ENABLED && <Checkbox label="Agreed to receive work alerts on WhatsApp" hint={fields.whatsappOptIn ?? 'Required before any WhatsApp alert is sent. Without it, WhatsApp alerts are logged as skipped.'} checked={f.whatsappOptIn} onChange={(e) => set('whatsappOptIn', e.target.checked)} />}
@@ -340,7 +364,7 @@ export function StaffProfilePage() {
             {u.name} {u.status !== 'active' && <Tag tone="muted">Inactive</Tag>}
           </h1>
           <p className="muted">
-            {u.title} · <RoleBadge role={u.role} /> · {p.team?.name ?? 'No team'}
+            {u.title} · <RoleBadge role={u.role} /> · {p.team?.name ?? 'No department'}
           </p>
         </div>
         {canManage && (
@@ -448,4 +472,11 @@ export function StaffProfilePage() {
       {editing && <StaffDialog row={u} onClose={() => setEditing(false)} />}
     </div>
   );
+}
+
+/** ADR-0015 (D-162): a general manager without manage_staff works in their own verticals only; null = no limit. */
+function useGmVerticals(): string[] | null {
+  const auth = useAuth();
+  if (!auth.bootstrap || auth.permissions?.includes('manage_staff')) return null;
+  return auth.bootstrap.headOf ?? [];
 }

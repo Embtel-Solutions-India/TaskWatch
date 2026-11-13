@@ -4,7 +4,7 @@ import { HOUR } from '../clock.js';
 import { config } from '../config.js';
 import { pool, tx } from '../db/pool.js';
 import { formatHours, LEVEL_LABELS, openSql } from '../domain.js';
-import { emailHtml } from '../notify/channels.js';
+import { emailLayout, esc } from '../notify/emailTemplates.js';
 import { notify } from '../notify/notify.js';
 import { visibilityFilter } from './access.js';
 import { getDirectory, hasRole, type Directory, type DirUser } from './directory.js';
@@ -12,7 +12,6 @@ import { organizationIds } from './organizations.js';
 import { getRuleSet } from './rules.js';
 import { getSettings } from './settings.js';
 
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 interface DigestData {
   red: Array<{ id: number; title: string; assignee: string; entity: string; level: number; silentHours: number }>;
@@ -75,12 +74,18 @@ function digestHtml(viewer: DirUser, d: DigestData): string {
   const trend = `<table style="border-collapse:collapse;font-size:13px"><tr><th ${th}>Week of</th><th ${th}>Closed</th><th ${th}>On time</th></tr>${d.trend
     .map((w) => `<tr><td ${td}>${w.week}</td><td ${td}>${w.closed}</td><td ${td}>${w.closed ? Math.round((w.onTime / w.closed) * 100) + '%' : '—'}</td></tr>`)
     .join('')}</table>`;
-  const intro = emailHtml(`Good morning ${viewer.name.split(' ')[0]}, here is this week's TaskWatch summary.`, null);
-  return `${intro}<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1d2433;max-width:640px">
+  return emailLayout({
+    tone: 'blue',
+    badge: 'Weekly Digest',
+    art: 'checklist',
+    title: ['Your week in ', 'TaskWatch'],
+    intro: `Good morning ${viewer.name.split(' ')[0]}, here is this week's TaskWatch summary.`,
+    content: `<div style="font-size:14px;color:#1d2433">
     <h3 style="margin:20px 0 8px">Red items (${d.red.length})</h3>${red}
     <h3 style="margin:20px 0 8px">Repeat offenders</h3>${offenders}
-    <h3 style="margin:20px 0 8px">On-time trend</h3>${trend}
-    <p style="margin-top:20px"><a href="${config.appUrl}/dashboard">Open the accountability dashboard</a></p></div>`;
+    <h3 style="margin:20px 0 8px">On-time trend</h3>${trend}</div>`,
+    cta: { label: 'Open the dashboard', href: `${config.appUrl}/` },
+  });
 }
 
 /** Who receives the digest: active people holding manager, CoS or CEO (any of their roles, D-8). */

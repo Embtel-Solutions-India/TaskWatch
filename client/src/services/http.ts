@@ -5,8 +5,9 @@ import { ApiError, type ApiStatus } from './authz/permissions';
 /**
  * Which backend the screens use. 'mock' (default) keeps the prototype's in-browser data; 'server' is switched on
  * with VITE_BACKEND=server once a feature's endpoints exist. Each feature moves its own API functions over.
+ * A production build is always 'server': without client/.env (git-ignored) it would otherwise save into the browser.
  */
-export const BACKEND: 'mock' | 'server' = import.meta.env?.VITE_BACKEND === 'server' ? 'server' : 'mock';
+export const BACKEND: 'mock' | 'server' = import.meta.env?.PROD || import.meta.env?.VITE_BACKEND === 'server' ? 'server' : 'mock';
 
 const KNOWN: readonly ApiStatus[] = [400, 401, 403, 404, 409, 413, 422, 429, 500];
 

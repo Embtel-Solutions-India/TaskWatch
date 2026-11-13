@@ -12,10 +12,10 @@ import { can, visibilityFilter } from './access.js';
 import { presentKind } from './activity.js';
 import { appendAdmin } from './audit.js';
 import { hhmm } from './rules.js';
-import { endAllSessions } from './auth.js';
+import { endAllSessions, signInMethod } from './auth.js';
 import { invalidateDirectory, type Directory, type DirUser } from './directory.js';
 import { sendAccountEmail } from './passwordReset.js';
-import { syncReportingLines, vacatePosts } from './structure.js';
+import { headOf, syncReportingLines, vacatePosts, worktimeOf } from './structure.js';
 import { effectivePermissions } from './permissions.js';
 import { listTasks } from './queries.js';
 import { getSettings } from './settings.js';
@@ -40,7 +40,7 @@ function staffRow(r: Record<string, any>, withContact: boolean) {
     whatsappOptIn: r.whatsapp_opt_in,
     quietStart: r.quiet_start,
     quietEnd: r.quiet_end,
-    ...(withContact ? { email: r.email, phone: r.phone, whatsapp: r.whatsapp } : {}),
+    ...(withContact ? { email: r.email, phone: r.phone, whatsapp: r.whatsapp, signIn: signInMethod(r.email, r.google_domains, r.has_password) } : {}),
     openTasks: r.open_tasks,
     overdueTasks: r.overdue_tasks,
   };
@@ -48,18 +48,23 @@ function staffRow(r: Record<string, any>, withContact: boolean) {
 
 const ROW_SQL = `
   select u.*, m.name as manager_name, tm.name as team_name,
+    (select o.google_domains from organizations o where o.id = u.organization_id) as google_domains,
+    exists (select 1 from user_credentials c where c.user_id = u.id and c.password_hash is not null) as has_password,
     (select count(*)::int from tasks t where t.assignee_id = u.id and ${openSql('t')}) as open_tasks,
     (select count(*)::int from tasks t where t.assignee_id = u.id and ${activeSql('t')} and t.due_at < $2) as overdue_tasks -- H3: in review is never overdue
   from users u left join users m on m.id = u.manager_id left join teams tm on tm.id = u.team_id
   where u.organization_id = $1`;
 
-const seesContact = (viewer: DirUser, dir: Directory, personId: number) => personId === viewer.id || can(viewer, dir, 'manage_staff');
+/** Contacts: oneself, manage_staff holders, and a GM for their own vertical's people (ADR-0015, D-162). */
+const seesContact = (viewer: DirUser, dir: Directory, person: { id: number; entity_id: string }, heads: readonly string[]) =>
+  person.id === viewer.id || can(viewer, dir, 'manage_staff') || heads.includes(person.entity_id);
 
 /** STAFF-01: everyone the viewer may see, active and inactive. Filters and stats stay client-side (ADR-0009). */
 export async function listPeople(viewer: DirUser, dir: Directory) {
   const visible = dir.all().filter((u) => canViewUser(dir.org, viewer, u)).map((u) => u.id);
   const { rows } = await pool.query(`${ROW_SQL} and u.id = any($3) order by u.entity_id, u.name`, [viewer.organizationId, clock.now(), visible]);
-  return { items: rows.map((r) => staffRow(r, seesContact(viewer, dir, r.id))) };
+  const heads = await headOf(viewer.id, viewer.organizationId);
+  return { items: rows.map((r) => staffRow(r, seesContact(viewer, dir, r, heads))) };
 }
 
 /** One person's directory row. Create and edit need manage_staff, so contacts are included unless the caller says otherwise. */
@@ -101,7 +106,7 @@ export async function personProfile(viewer: DirUser, dir: Directory, id: number)
   const manager = target.managerId ? dir.get(target.managerId) : undefined;
   const team = rows[0].team_id ? { id: rows[0].team_id, name: rows[0].team_name } : null;
   return {
-    user: staffRow(rows[0], seesContact(viewer, dir, id)),
+    user: staffRow(rows[0], seesContact(viewer, dir, rows[0], await headOf(viewer.id, viewer.organizationId))),
     manager: manager && canViewUser(dir.org, viewer, manager) ? brief(manager) : null,
     reports: dir.all().filter((u) => u.managerId === id && canViewUser(dir.org, viewer, u)).map(brief),
     chain: ancestorsOf(dir.org, id).filter((p) => canViewUser(dir.org, viewer, p)).map((p) => brief(dir.must(p.id))),
@@ -122,7 +127,7 @@ export async function personProfile(viewer: DirUser, dir: Directory, id: number)
 
 /* ---------- Create / edit (T-3.4; STAFF-02, STAFF-05, D-75, D-99) ---------- */
 
-const NAME = 'Enter a first and last name.';
+const NAME = "Enter the person's name.";
 const EMAIL = 'Enter a valid email address.';
 const TITLE = 'Enter a job title.';
 const ROLE = 'Choose a role.';
@@ -134,8 +139,8 @@ export const personSchema = z
     name: z
       .string({ error: NAME })
       .trim()
-      .max(120, { error: 'Use at most 120 characters.' })
-      .refine((n) => n.split(/\s+/).filter(Boolean).length >= 2, { error: NAME }),
+      .min(1, { error: NAME }) // D-136: one word is enough (single-name people)
+      .max(120, { error: 'Use at most 120 characters.' }),
     email: z.string({ error: EMAIL }).trim().toLowerCase().regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, { error: EMAIL }),
     title: z.string({ error: TITLE }).trim().min(1, { error: TITLE }).max(120, { error: 'Use at most 120 characters.' }),
     roles: z
@@ -217,7 +222,7 @@ const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.l
  * STAFF-02 edit. Role changes need manage_roles, never on oneself, and the organization keeps an active CoS. Each kind
  * of change gets its own audit record. D-99: an email change ends the person's sessions and tells the old address.
  */
-export async function updatePerson(actor: DirUser, dir: Directory, id: number, p: PersonInput): Promise<void> {
+export async function updatePerson(actor: DirUser, dir: Directory, id: number, p: PersonInput, opts: { lineRoles?: boolean } = {}): Promise<void> {
   const org = actor.organizationId;
   const before = await tx(async (c) => {
     const { rows } = await c.query('select * from users where id = $1 and organization_id = $2 for update', [id, org]);
@@ -225,7 +230,8 @@ export async function updatePerson(actor: DirUser, dir: Directory, id: number, p
     if (!b) throw notFound('Person not found.');
     if (!sameSet(b.roles, p.roles)) {
       if (id === actor.id) throw forbidden('You cannot change your own role.');
-      if (!can(actor, dir, 'manage_roles')) throw forbidden("You don't have permission to change roles.");
+      // ADR-0015 (D-162): a GM may move people between staff, lead and manager in their vertical (the route checks the roles).
+      if (!can(actor, dir, 'manage_roles') && !opts.lineRoles) throw forbidden("You don't have permission to change roles.");
       if (b.roles.includes('cos') && !p.roles.includes('cos') && b.active) await keepOneActiveCos(c, org, id);
     }
     await checkPerson(c, org, p, id);
@@ -299,12 +305,12 @@ export async function setPersonStatus(actor: DirUser, id: number, status: 'activ
 export async function orgView(viewer: DirUser, dir: Directory) {
   const org = viewer.organizationId;
   const [entities, teams, people, settings] = await Promise.all([
-    pool.query(`select id, name, head_id as "headId" from entities where organization_id = $1 and archived_at is null order by sort, name`, [org]),
+    pool.query(`select * from entities where organization_id = $1 and archived_at is null order by sort, name`, [org]),
     pool.query(`select id, name, entity_id as "entityId", lead_id as "leadId" from teams where organization_id = $1 and archived_at is null order by entity_id, name`, [org]),
     listPeople(viewer, dir),
     getSettings(org),
   ]);
-  return { entities: entities.rows, teams: teams.rows, people: people.items, overloadThreshold: settings.overloadThreshold };
+  return { entities: entities.rows.map((e) => ({ id: e.id, name: e.name, headId: e.head_id, worktime: worktimeOf(e) })), teams: teams.rows, people: people.items, overloadThreshold: settings.overloadThreshold };
 }
 
 export const placementSchema = z
@@ -337,5 +343,5 @@ export async function setPlacement(actor: DirUser, dir: Directory, id: number, p
     await syncReportingLines(c, org, actor.id, (x) => x.id === id || x.manager_id === id);
   });
   invalidateDirectory(); // alert routing reads the directory, so the next escalation follows the new line (ORG-02-AC-4)
-  return personRow(actor, id, seesContact(actor, dir, id)); // SEC-9: a team move by a lead returns no contact details
+  return personRow(actor, id, seesContact(actor, dir, { id, entity_id: dir.must(id).entityId }, await headOf(actor.id, actor.organizationId))); // SEC-9: a team move by a lead returns no contact details
 }

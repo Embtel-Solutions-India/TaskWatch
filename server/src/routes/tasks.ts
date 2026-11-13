@@ -22,7 +22,6 @@ import {
   extensionQueue,
   EXTENSION_FILTERS,
   listTasks,
-  parentOptions,
   reviewQueue,
   taskDetail,
   taskSummary,
@@ -39,6 +38,7 @@ import {
   changeDue,
   completeTask,
   createTask,
+  createTasks,
   decideExtension,
   dueFrom,
   postProgress,
@@ -108,11 +108,6 @@ tasksRouter.get('/tasks/options/assignees', async (req, res) => {
   res.json(await assigneeOptions(user, dir, assignableUsers(user, dir)));
 });
 
-tasksRouter.get('/tasks/options/parents', async (req, res) => {
-  const { user, dir } = me(req);
-  res.json(await parentOptions(user, dir));
-});
-
 /* ---------- Create and edit (TASK-01…03) ---------- */
 
 /** PERF: a 0–100 integer score from a reviewer or giver. */
@@ -134,11 +129,17 @@ const taskBody = z
     instructions: text(5000).default(''),
     category: z.string({ error: 'Choose a category.' }).default(''),
     priority: z.enum(PRIORITIES, { error: 'Choose a priority.' }),
-    assigneeId: z.number({ error: 'Choose who will do this.' }).int(),
+    assigneeId: z.number({ error: 'Choose who will do this.' }).int().optional(),
+    // D-153: several people in one action, one task each. Mutually exclusive with assigneeId.
+    assigneeIds: z.array(z.number().int()).min(1, { error: 'Choose who will do this.' }).max(20, { error: 'Choose at most 20 people.' })
+      .refine((ids) => new Set(ids).size === ids.length, { error: 'Choose each person once.' }).optional(),
     teamId: z.number().int().nullable().default(null),
     dueDate: z.string({ error: 'Set a due date.' }),
     dueTime: z.string().regex(TIME, { error: 'Enter a valid time.' }).optional(),
     startDate: z.string().regex(DATE, { error: 'Enter a valid date.' }).nullable().optional(),
+    startTime: z.string().regex(TIME, { error: 'Enter a valid time.' }).optional(), // D-144
+    submissionRequirements: text(2000).default(''),
+    reviewerId: z.number().int().nullable().default(null),
     reviewRequired: z.boolean().default(false),
     parentId: z.number().int().nullable().default(null),
     ...measuredFields,
@@ -146,21 +147,24 @@ const taskBody = z
   .strict();
 
 /** Body → service input. Dates are read in the caller's own zone (D-5); a missing or bad date is its own 422. */
-function toTaskInput(req: Request, b: z.infer<typeof taskBody>): TaskInput {
+function toTaskInput(req: Request, b: z.infer<typeof taskBody>, assigneeId = b.assigneeId): TaskInput {
   const tz = me(req).user.timeZone;
   if (!b.dueDate) throw invalid({ dueDate: 'Set a due date.' });
   const dueAt = DATE.test(b.dueDate) ? dueFrom(b.dueDate, b.dueTime, tz) : null;
   if (!dueAt) throw invalid({ dueDate: 'Enter a valid date.' });
+  if (assigneeId === undefined) throw invalid({ assigneeId: 'Choose who will do this.' });
   return {
     title: b.title,
     description: b.description,
     instructions: b.instructions,
     category: b.category,
     priority: b.priority,
-    assigneeId: b.assigneeId,
+    assigneeId,
     teamId: b.teamId,
     dueAt,
-    startAt: b.startDate ? dueFrom(b.startDate, '00:00', tz) : null,
+    startAt: b.startDate ? dueFrom(b.startDate, b.startTime ?? '00:00', tz) : null,
+    submissionRequirements: b.submissionRequirements || null,
+    reviewerId: b.reviewRequired ? b.reviewerId : null,
     reviewRequired: b.reviewRequired,
     parentId: b.parentId,
     target: b.target,
@@ -173,7 +177,14 @@ function toTaskInput(req: Request, b: z.infer<typeof taskBody>): TaskInput {
 /** TASK-01 / TASK-02: `draft: true` saves without assigning. 201 `{task, actions}`. */
 tasksRouter.post('/tasks', async (req, res) => {
   const { user, dir } = me(req);
-  const { draft, ...rest } = taskBody.extend({ draft: z.boolean().default(false) }).parse(req.body);
+  const { draft, assigneeIds, ...rest } = taskBody.extend({ draft: z.boolean().default(false) }).parse(req.body);
+  if (assigneeIds) {
+    if (rest.assigneeId !== undefined) throw invalid({ assigneeIds: 'Choose one person or several, not both.' });
+    // D-153: one task per person, all in one transaction, so a bad entry creates none.
+    const ids = await createTasks(user, assigneeIds.map((a) => toTaskInput(req, rest, a)), { draft });
+    res.status(201).json({ tasks: await Promise.all(ids.map(async (id) => (await taskViewById(user, dir, id)).task)) });
+    return;
+  }
   const id = await createTask(user, toTaskInput(req, rest), { draft });
   res.status(201).json(await taskViewById(user, dir, id));
 });
@@ -278,7 +289,16 @@ action(
     .refine((b) => b.outcomeScore !== undefined || b.shortfallAccepted !== undefined, { error: 'Give an outcome score or decide on the shortfall.' }),
   (req, id, b) => rateTask(me(req).user, id, b),
 );
-action('reassign', z.object({ toId: z.number().int().optional(), reason: z.string().max(1000).default('') }).strict(), (req, id, b) => reassignTask(me(req).user, id, b));
+action(
+  'reassign',
+  z.object({ toId: z.number().int().optional(), reason: z.string().max(1000).default(''), dueDate: z.string().optional(), dueTime: z.string().regex(TIME).optional() }).strict(),
+  (req, id, b) => {
+    const u = me(req).user;
+    const dueAt = b.dueDate ? (DATE.test(b.dueDate) ? dueFrom(b.dueDate, b.dueTime, u.timeZone) : null) : undefined;
+    if (dueAt === null) throw invalid({ dueDate: 'Enter a valid date.' });
+    return reassignTask(u, id, { toId: b.toId, reason: b.reason, dueAt });
+  },
+);
 action('cancel', reasonOnly, (req, id, b) => cancelTask(me(req).user, id, b.reason));
 // D-133: a discarded draft is no longer visible, so this answers 204 instead of the task view.
 tasksRouter.post('/tasks/:id/discard', async (req, res) => {

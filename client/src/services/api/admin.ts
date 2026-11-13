@@ -27,6 +27,8 @@ export interface StaffRow extends User {
   entityId: string;
   managerName: string | null;
   teamName: string | null;
+  /** Server mode: 'google' = signs in with Google (no password, no reset email). Absent in the prototype. */
+  signIn?: 'google' | 'both' | 'password';
   openTasks: number;
   overdueTasks: number;
 }
@@ -116,7 +118,7 @@ export function normalizeWhatsApp(v: string): string | null {
 function validateStaff(input: StaffInput, existingId?: string): void {
   return read((db) => {
     const f: Record<string, string> = {};
-    if (input.name.trim().split(/\s+/).length < 2) f.name = 'Enter a first and last name.';
+    if (!input.name.trim()) f.name = "Enter the person's name."; // D-136
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim())) f.email = 'Enter a valid email address.';
     else if (db.users.some((u) => u.email.toLowerCase() === input.email.trim().toLowerCase() && u.id !== existingId)) f.email = 'Another account already uses this email.';
     if (!input.title.trim()) f.title = 'Enter a job title.';
@@ -183,18 +185,33 @@ export function setStaffStatus(id: string, status: 'active' | 'inactive'): { ope
   });
 }
 
+/** Who `user` may send account emails to; the same rules as the server: a CoS only by a CoS; D-98: oneself or people below. */
+function accountTarget(db: Parameters<Parameters<typeof mutate>[0]>[0], user: User, id: string): User {
+  assertPerm(db, user, 'manage_staff', 'manage staff');
+  const u = findUser(db, id);
+  if (u.role === 'cos' && user.role !== 'cos') throw new ApiError(403, 'Only a Chief of Staff can reset another Chief of Staff.');
+  if (user.role !== 'cos' && u.id !== user.id && !reportsOf(db, user.id).has(u.id)) throw new ApiError(403, 'You can only reset access for yourself or people below you in the reporting line.');
+  return u;
+}
+
 export function resetAccess(id: string): string | Promise<string> {
   if (BACKEND === 'server') return adminServer.resetAccess(id);
   return mutate((db, user, at) => {
-    assertPerm(db, user, 'manage_staff', 'manage staff');
-    const u = findUser(db, id);
-    // Same rules as the server: a CoS only by a CoS; D-98: otherwise only oneself or people below.
-    if (u.role === 'cos' && user.role !== 'cos') throw new ApiError(403, 'Only a Chief of Staff can reset another Chief of Staff.');
-    if (user.role !== 'cos' && u.id !== user.id && !reportsOf(db, user.id).has(u.id)) throw new ApiError(403, 'You can only reset access for yourself or people below you in the reporting line.');
+    const u = accountTarget(db, user, id);
     const token = Math.random().toString(36).slice(2, 10);
     db.passwordResets.push({ email: u.email, token, at });
     audit(db, { at, actorId: user.id, action: 'staff.access_reset', targetType: 'user', targetId: id, taskId: null, prev: null, next: 'Reset link issued (simulated)', source: 'ui', context: u.email });
     return token;
+  });
+}
+
+/** D-172: send a person their onboarding email (welcome + set-password link). Prototype: simulated, audited only. */
+export function sendOnboarding(id: string): void | Promise<void> {
+  if (BACKEND === 'server') return adminServer.sendOnboarding(id);
+  return mutate((db, user, at) => {
+    const u = accountTarget(db, user, id);
+    if (u.status !== 'active') throw new ApiError(409, 'This person is deactivated. Reactivate them first.');
+    audit(db, { at, actorId: user.id, action: 'staff.onboarding_sent', targetType: 'user', targetId: id, taskId: null, prev: null, next: 'Onboarding email (simulated)', source: 'ui', context: u.email });
   });
 }
 
@@ -286,36 +303,50 @@ export function getRules(): RulesConfig {
 /** POL-01/03. The prototype has one policy and no entity overrides. */
 export interface PolicySet {
   defaults: RulesConfig;
+  /** Effective policy of each vertical that has its own row (inherited fields filled in). */
   overrides: Record<string, RulesConfig>;
+  /** ADR-0014: what each vertical stores itself (the "Custom" fields). */
+  stored: Record<string, Partial<Record<string, unknown>>>;
+  history: { id: number; at: string; target: string; note: string | null; actor: string | null; /** null for an apply or a reset (ADR-0014). */ version: number | null; after: unknown }[];
+  /** The verticals the viewer heads as general manager (D-141). */
+  headOf: string[];
   entities: { id: string; name: string }[];
 }
 
 export function getPolicies(): PolicySet | Promise<PolicySet> {
   if (BACKEND === 'server') return tasksServer.policies();
-  return { defaults: getRules(), overrides: {}, entities: [] };
+  return { defaults: getRules(), overrides: {}, stored: {}, history: [], headOf: [], entities: [] };
 }
 
-/** `scope`: 'default' or an entity id (server mode; an override holds windows and multiples only, D-48). */
-export function setRules(next: RulesConfig, scope = 'default'): void | Promise<void> {
+/** ADR-0014 / D-146: restamp the open tasks of a scope from the policy as it now stands. The prototype has none to restamp. */
+export function applyPolicy(scope: string): { updated: number } | Promise<{ updated: number }> {
+  if (BACKEND === 'server') return tasksServer.applyPolicy(scope);
+  return { updated: 0 };
+}
+
+/** `scope`: 'default' (a whole policy) or a vertical id (only the fields it changed, ADR-0014 / D-142). */
+export function setRules(next: RulesConfig | Partial<RulesConfig>, scope = 'default'): void | Promise<void> {
   if (BACKEND === 'server') return tasksServer.setPolicy(scope, next);
+  if (scope !== 'default') return; // the prototype has no verticals
+  const nextRules = next as RulesConfig;
   mutate((db, user, at) => {
     assertPerm(db, user, 'manage_escalation_policies', 'change escalation policies');
     const f: Record<string, string> = {};
-    for (const p of PRIORITIES) if (!(next.windowsHours[p] > 0 && next.windowsHours[p] <= 720)) f[`w_${p}`] = 'Between 1 and 720 hours.';
-    const m = next.multiples;
+    for (const p of PRIORITIES) if (!(nextRules.windowsHours[p] > 0 && nextRules.windowsHours[p] <= 720)) f[`w_${p}`] = 'Between 1 and 720 hours.';
+    const m = nextRules.multiples;
     if (!(m[0] > 0 && m[0] < m[1] && m[1] < m[2] && m[2] < m[3])) f.multiples = 'Multiples must increase from L0 to L3.';
-    const o = next.overdueOffsetsHours;
+    const o = nextRules.overdueOffsetsHours;
     if (!(o[0] >= 0 && o[0] < o[1] && o[1] < o[2])) f.offsets = 'Past-due offsets must increase from L1 to L3.';
-    if (!(next.ackSnoozeHours >= 1 && next.ackSnoozeHours <= 72)) f.ackSnoozeHours = 'Between 1 and 72 hours.';
+    if (!(nextRules.ackSnoozeHours >= 1 && nextRules.ackSnoozeHours <= 72)) f.ackSnoozeHours = 'Between 1 and 72 hours.';
     if (Object.keys(f).length) invalid(f);
     const changes: string[] = [];
-    for (const p of PRIORITIES) if (db.rules.windowsHours[p] !== next.windowsHours[p]) changes.push(`${PRIORITY_LABEL[p as Priority]} window ${db.rules.windowsHours[p]}→${next.windowsHours[p]} h`);
+    for (const p of PRIORITIES) if (db.rules.windowsHours[p] !== nextRules.windowsHours[p]) changes.push(`${PRIORITY_LABEL[p as Priority]} window ${db.rules.windowsHours[p]}→${nextRules.windowsHours[p]} h`);
     if (db.rules.multiples.join() !== m.join()) changes.push(`multiples ${db.rules.multiples.join('/')}→${m.join('/')}`);
     if (db.rules.overdueOffsetsHours.join() !== o.join()) changes.push(`past-due ${db.rules.overdueOffsetsHours.join('/')}→${o.join('/')}`);
-    if (db.rules.ackSnoozeHours !== next.ackSnoozeHours) changes.push(`ack snooze ${db.rules.ackSnoozeHours}→${next.ackSnoozeHours} h`);
-    if (db.rules.dueSoonHours !== next.dueSoonHours) changes.push(`due-soon ${db.rules.dueSoonHours}→${next.dueSoonHours} h`);
-    if (JSON.stringify(db.rules.quietHours) !== JSON.stringify(next.quietHours)) changes.push('quiet hours');
-    db.rules = structuredClone(next);
+    if (db.rules.ackSnoozeHours !== nextRules.ackSnoozeHours) changes.push(`ack snooze ${db.rules.ackSnoozeHours}→${nextRules.ackSnoozeHours} h`);
+    if (db.rules.dueSoonHours !== nextRules.dueSoonHours) changes.push(`due-soon ${db.rules.dueSoonHours}→${nextRules.dueSoonHours} h`);
+    if (JSON.stringify(db.rules.quietHours) !== JSON.stringify(nextRules.quietHours)) changes.push('quiet hours');
+    db.rules = structuredClone(nextRules);
     audit(db, { at, actorId: user.id, action: 'policy.updated', targetType: 'policy', targetId: 'default', taskId: null, prev: null, next: changes.join('; ') || 'No changes', source: 'ui', context: 'Escalation policy' });
     processEscalations(db, now());
   });
@@ -465,7 +496,7 @@ export function listRecurrences(): RecurrenceRow[] | Promise<RecurrenceRow[]> {
 
 function validateRecurrence(input: RecurrenceInput, categories: string[]) {
   const f = scheduleErrors(input);
-  if (!categories.includes(input.category)) f.category = 'Choose a category.'; // REC-02-AC-6: never defaulted
+  if (input.category && !categories.includes(input.category)) f.category = 'Choose a category.'; // optional (owner 2026-11-13); never defaulted
   if (Object.keys(f).length) invalid(f);
 }
 

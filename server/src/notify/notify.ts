@@ -15,7 +15,7 @@ export interface Recipient {
 }
 
 interface Row {
-  channel: 'inapp' | 'email' | 'whatsapp';
+  channel: 'inapp' | 'email' | 'whatsapp' | 'push';
   status: string;
   address: string | null;
   error: string | null;
@@ -47,6 +47,9 @@ export async function notify(
   const firsts = new Map<number, Recipient>(); // de-duplicated; the first mention (to before cc) wins
   for (const r of recipients) if (!firsts.has(r.userId)) firsts.set(r.userId, r);
   const prefs = await prefsOf(db, [...firsts.keys()]);
+  // ADR-0012: only people who enabled browser notifications somewhere get a push row.
+  const { rows: pushers } = await db.query<{ user_id: number }>('select distinct user_id from push_subscriptions where user_id = any($1) and revoked_at is null', [[...firsts.keys()]]);
+  const hasBrowser = new Set(pushers.map((p) => p.user_id));
   for (const r of firsts.values()) {
     const u = dir.get(r.userId);
     if (!u || !u.active) continue;
@@ -59,6 +62,7 @@ export async function notify(
     const rows: Row[] = [];
     if (!msg.html && want('inApp')) rows.push({ channel: 'inapp', status: 'sent', address: null, error: null, sendAfter: now, sentAt: now });
     if (want('email')) rows.push({ channel: 'email', address: u.email, ...queued });
+    if (!msg.html && hasBrowser.has(u.id) && want('push')) rows.push({ channel: 'push', address: null, ...queued });
     if (WHATSAPP_ENABLED && !msg.html && msg.template && want('whatsapp')) {
       const wa = u.whatsapp; // migration 009 copied the older numbers from phone (KI-25)
       if (!wa) rows.push({ channel: 'whatsapp', status: 'skipped', address: null, error: 'No WhatsApp number on file', sendAfter: now, sentAt: null });

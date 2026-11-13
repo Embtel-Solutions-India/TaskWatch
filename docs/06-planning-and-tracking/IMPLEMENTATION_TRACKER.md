@@ -1,6 +1,6 @@
 # Implementation Tracker
 
-> Last updated: 2026-11-10 (Notifications, Recurring and Reports DONE: owner `npm test`, `npm run e2e` and the reports smoke all green). This file replaces the first draft [../IMPLEMENTATION_TRACKER.md](../IMPLEMENTATION_TRACKER.md), which is kept unedited for reference.
+> Last updated: 2026-11-12 (ADR-0014 rows added: US-01…US-07 and D-140…D-153, TESTING; see the section before the notes). Before that: 2026-11-10 (Notifications, Recurring and Reports DONE: owner `npm test`, `npm run e2e` and the reports smoke all green). This file replaces the first draft [../IMPLEMENTATION_TRACKER.md](../IMPLEMENTATION_TRACKER.md), which is kept unedited for reference.
 > **Status per row is current** (DONE, CODE_COMPLETE, IN_PROGRESS, ANALYSIS, READY, BLOCKED, REMOVED). The note "No backend work has started", written 2026-11-03, no longer applies. "Existing, not run" means a test in `server/test` asserts part of the feature and has never been executed in this effort ([EXISTING_SYSTEM_ANALYSIS §3.7](../01-discovery/EXISTING_SYSTEM_ANALYSIS.md)).
 > Feature IDs come from [PRODUCT_REQUIREMENTS.md](../02-product-requirements/PRODUCT_REQUIREMENTS.md), including the IDs added later at its end. Phases and tasks: [IMPLEMENTATION_ROADMAP.md](IMPLEMENTATION_ROADMAP.md), [TASK_BREAKDOWN.md](TASK_BREAKDOWN.md). Done means [DEFINITION_OF_DONE.md](../04-engineering-standards/DEFINITION_OF_DONE.md).
 
@@ -169,7 +169,52 @@ Full suite: `npm test` 71/71, typecheck exit 0, client build ok (2026-11-04).
 | SRCH-01 | Global search | P2 | Dashboards | T-3.2, T-1.13 | DONE | ✅ | 🟡 | — | 🟡 | 🟡 | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ | D-33, D-82 | DONE 2026-11-07 (owner: `npm test` + `npm run e2e` all green) | `server/src/routes/tasks.ts:36` (`q` only) | 2026-11-06 |
 | DEMO-01 | Demo bar and dev clock | P3 | Demo | AUTH-06 | CODE_COMPLETE | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | D-17, D-47 | TC-DEMO-01-01/02 green 2026-11-10; browser check in server mode with `DEMO_TOOLS=true` | `server/src/config.ts` `demoToolsAllowed`; `server/src/routes/admin.ts` `/dev/clock`; `client/src/features/demo/ServerClockBar.tsx` | 2026-11-10 |
 
+## ADR-0014: owner user stories and decisions (2026-11-12)
+
+[ADR-0014](../03-architecture/decisions/ADR-0014.md) (Accepted), built per [the plan](ADR-0014-IMPLEMENTATION-PLAN.md) Tasks 1–13, **uncommitted**. These rows are not in the 98 counted above. Status **TESTING**: plan Tasks 1–14 done; full `npm test` 336/336, `npm run e2e` 4/4, typecheck 0 (2026-11-12); D-152 values entered (not applied). Open before DONE: the browser checks in KI-59. The rows it changed above (TASK-01, ESC-02, ESC-07, POL-01, POL-03) keep their DONE status for the behaviour they were signed off with; the new behaviour is tracked here.
+
+| ID | Name | Pri | Phase | Depends on | Status | FRD | Arch | DB | API | BE | FE | Tst | Sec | QA | Doc | Done | Blockers | Next action | Key files | Last updated |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| US-01 | Schedule and assign: start time, duration, requirements, reviewer, several assignees, soft warnings | P1 | ADR-0014 | TASK-01 | TESTING | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ⬜ | 🟡 | ✅ | ⬜ | — | Full `npm test`; browser check of the warning banner and 360 px | `routes/tasks.ts`, `services/tasks.ts` `createTasks`; `TaskFormPage.tsx`; `shared/schedule.ts` | 2026-11-12 |
+| US-02 | Vertical policy edited by the GM | P0 | ADR-0014 | POL-01, POL-03 | TESTING | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ⬜ | 🟡 | ✅ | ⬜ | — | Fix TC-POL-04-06 (history versions); check /admin/policies as a GM in server mode; full `npm test` | `services/rules.ts`, `routes/rules.ts`; `AdminPages.tsx` `PoliciesPage`; `shared/policy.ts` | 2026-11-12 |
+| US-03 | Cross-vertical policy admin (CoS), history, apply to open tasks | P0 | ADR-0014 | US-02 | TESTING | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | ⬜ | 🟡 | ✅ | ⬜ | D-152 values | Owner/CoS enters the D-152 values and decides on "Apply to open tasks" (plan Task 14 Step 1) | as US-02 | 2026-11-12 |
+| US-04 | My schedule / team schedule | P1 | ADR-0014 | TASK-04 | TESTING | ✅ | ✅ | — | ✅ | ✅ | ✅ | 🟡 | ⬜ | 🟡 | ✅ | ⬜ | — | Full `npm test`; 360 px browser check | `routes/schedule.ts`; `features/schedule/SchedulePage.tsx` | 2026-11-12 |
+| US-05 | Pre-deadline warning and floating countdown | P0 | ADR-0014 | ESC-07 | TESTING | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ⬜ | 🟡 | ✅ | ⬜ | — | Full `npm test`; 360 px browser check | `engine/engine.ts` `noticesDue`; `features/shell/DeadlineTimer.tsx`; `e2e/escalation-v2.spec.ts` | 2026-11-12 |
+| US-06 | Submit and track review: on-time badge, reviewer accountability, R1/R2 | P1 | ADR-0014 | WF-04, WF-06 | TESTING | ✅ | ✅ | ✅ | — | ✅ | ✅ | 🟡 | ⬜ | ⬜ | ✅ | ⬜ | — | Full `npm test`; browser check of the On time / Late badge | `engine/engine.ts` `applyLevel`; `services/reports.ts`; `TaskDetailPage.tsx` | 2026-11-12 |
+| US-07 | Progress updates never move the deadline | P0 | ADR-0014 | WF-03, ESC-02 | TESTING | ✅ | ✅ | ✅ | — | ✅ | — | 🟡 | ⬜ | ⬜ | ✅ | ⬜ | — | Full `npm test` | `shared/levels.ts`; `shared/policy.ts` | 2026-11-12 |
+
+| D | Decision (short) | Built in | Status |
+|---|---|---|---|
+| D-140 | Per-priority, per-vertical L2/L3 delays; L1 at due | `shared/policy.ts`, migration 018, `stampMilestones` | Built; shipped values = +24 h/+72 h (AC-2 unchanged) |
+| D-141 | GM edits own vertical (`head_id`, no new key) | `routes/rules.ts` `canEditScope` | Built; GM page not hand-checked in server mode (e2e covers save + apply) |
+| D-142 | Vertical fields: windows, multiples, delays, review SLA, extra recipients | `verticalOverrideSchema`, `resolvePolicy`, `diffPolicy` | Built |
+| D-143 | 10-min warning; due-soon only for long tasks | `noticesDue` | Built |
+| D-144 | Start time; start notice at start − 10 min | `routes/tasks.ts`, `noticesDue` | Built |
+| D-145 | In review: keep escalating, accountability, R1/R2 | `applyLevel`, `noticesDue`, `services/reports.ts` | Built |
+| D-146 | Snapshot milestones; explicit apply | `POST /api/rules/:scope/apply` | Built |
+| D-147 | Critical L1 never held in quiet hours | `notify/messages.ts` | Built |
+| D-148 | Late reassignment needs a new due | `reassignTask` | Built for Reassign and Edit (`reassignDueError`) |
+| D-149 | One countdown pill + "N more" | `nextCountdown`, `DeadlineTimer.tsx` | Built |
+| D-150 | GM sees only own vertical (404 elsewhere) | `readableScopes`, `canEditScope` | Built |
+| D-151 | Due never shifted; soft warnings | `TaskFormPage.tsx` | Built; banner not browser-checked |
+| D-152 | Default delays and review SLAs | `DEFAULT_REVIEW_SLA` (shipped); delays via the Policies page | Review SLAs shipped; delay values **not entered yet** (plan Task 14 Step 1, owner) |
+| D-153 | Several assignees = one task each, all or none | `createTasks` | Built |
+
 ## Notes on the honest marks
 - **Backend 🟡** means the old-model server has code for the behaviour. It still has to be reshaped to the new model ([FEATURE_GAP_ANALYSIS §5.3](../01-discovery/FEATURE_GAP_ANALYSIS.md)). It is not "half done".
 - **Tests 🟡** never means passing. All 38 existing tests are *existing, not run*. AUTH-07 has no test case (removed by D-94); TASK-10 gained TC-TASK-10-02 in Phase 8 ([RTM §3](REQUIREMENT_TRACEABILITY_MATRIX.md)).
 - **FE ⬜ everywhere:** every screen exists on the localStorage mock, but none calls the server yet.
+
+## ADR-0015: attendance, vertical working time, GM-run verticals (2026-11-13)
+
+[ADR-0015](../03-architecture/decisions/ADR-0015.md), [plan](ADR-0015-IMPLEMENTATION-PLAN.md) Tasks 1–8, **uncommitted**. Not in the 98 counted above.
+
+| ID | Feature | Status | Evidence |
+|---|---|---|---|
+| ATT-01 | GM marks attendance | TESTING | TC-ATT-01…07, e2e; browser-checked (e2e stack screenshots) |
+| ATT-02 | My attendance | TESTING | TC-ATT-07, e2e; 360 px checked |
+| ATT-03 | Away and escalation | TESTING | TC-ATT-08, TC-WT-03, e2e |
+| ORG-03 | Vertical working time | TESTING | TC-ORG-03-*, TC-WT-* |
+| STAFF-06 | GM manages their vertical | TESTING | TC-STAFF-06-* |
+
+TESTING until the owner has looked at the screens on the dev server (they were checked on the e2e stack only). Last run: `npm test` 371/371, `npm run e2e` 5/5, typecheck 0 (2026-11-13).

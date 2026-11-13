@@ -9,6 +9,7 @@ import { getStaffProfile, myDeliveries } from '../../services/api/admin';
 import { DeliveryRow } from '../admin/DeliveryLogPage';
 import { MANDATORY_TYPES } from '../../services/channels';
 import { getPrefs, setPrefs } from '../../services/api/misc';
+import { disablePush, enablePush, pushState, testPush, type PushState } from '../../services/push';
 import { getDb } from '../../services/mock/store';
 import type { NotificationPrefs, NotificationType } from '../../types';
 import { formatDate, pct } from '../../utils/format';
@@ -26,7 +27,7 @@ export function ProfilePage() {
         <div>
           <h1>{user.name}</h1>
           <p className="muted">
-            {user.title} · <RoleBadge role={user.role} /> · {p.team?.name ?? 'No team'}
+            {user.title} · <RoleBadge role={user.role} /> · {p.team?.name ?? 'No department'}
           </p>
         </div>
         <Link to="/settings/account" className="btn btn-secondary">
@@ -116,6 +117,7 @@ export function AccountSettingsPage() {
                 <th>In-app</th>
                 <th>Email{sim}</th>
                 {WHATSAPP_ENABLED && <th>WhatsApp{sim}</th>}
+                {BACKEND === 'server' && <th>Browser</th>}
               </tr>
             </thead>
             <tbody>
@@ -138,6 +140,9 @@ export function AccountSettingsPage() {
                       <span className="muted small" title="No approved WhatsApp template for this event">n/a</span>
                     )}
                   </td>}
+                  {BACKEND === 'server' && <td data-label="Browser">
+                    <input type="checkbox" aria-label={`${NOTIFICATION_LABEL[t]} browser`} checked={MANDATORY_TYPES.includes(t) || (draft.push?.[t] ?? true)} disabled={MANDATORY_TYPES.includes(t)} onChange={(e) => setDraft({ ...draft, push: { ...draft.push, [t]: e.target.checked } })} />
+                  </td>}
                 </tr>
               ))}
             </tbody>
@@ -148,6 +153,7 @@ export function AccountSettingsPage() {
           ) : (
             <p className="muted small">WhatsApp goes to {user.whatsapp} using approved message templates. Only assignments and escalations have templates.</p>
           )}
+          {BACKEND === 'server' && <BrowserPush />}
         </Card>
       </section>
       <MyMessages />
@@ -156,6 +162,40 @@ export function AccountSettingsPage() {
 }
 
 const WA_TYPES = WHATSAPP_TYPES;
+
+const PUSH_NOTE: Record<PushState, string> = {
+  unsupported: "This browser can't show notifications from TaskWatch.",
+  'ios-install': 'On iPhone or iPad: tap Share, then "Add to Home Screen", open TaskWatch from the Home Screen and turn this on there (iOS 16.4 or later).',
+  'off-server': 'Browser notifications are not set up on this TaskWatch server yet. Ask your administrator.',
+  denied: "Notifications are blocked for this site. Allow them in your browser's site settings, then reload this page.",
+  off: 'Get a notification on this device for everything that reaches your bell, even when TaskWatch is not open.',
+  on: 'This device shows TaskWatch notifications, even when the app is closed. Sign out or turn this off to stop them.',
+};
+
+/** ADR-0012: turn Web Push on or off for this browser; the Browser column above picks which kinds. */
+function BrowserPush() {
+  const [state, setState] = useState<PushState | null>(null);
+  useEffect(() => {
+    pushState().then(setState, () => setState('unsupported'));
+  }, []);
+  const toggle = useAction(async () => setState(state === 'on' ? (await disablePush(), 'off') : await enablePush()));
+  const test = useAction(testPush, { success: (r) => (r.simulated ? 'Test simulated (no push keys on the server)' : r.delivered ? 'Test sent: check this device' : 'No browser is enabled yet') });
+  if (!state) return null;
+  return (
+    <div className="push-device">
+      <label className="row-gap">
+        <input type="checkbox" checked={state === 'on'} disabled={state !== 'on' && state !== 'off'} onChange={() => toggle.run()} />
+        <strong>Browser notifications on this device</strong>
+      </label>
+      <p className="muted small">{PUSH_NOTE[state]}</p>
+      {state === 'on' && (
+        <Button size="sm" loading={test.pending} onClick={() => test.run()}>
+          Send a test
+        </Button>
+      )}
+    </div>
+  );
+}
 
 function MyMessages() {
   const user = useMe();

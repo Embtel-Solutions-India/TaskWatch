@@ -72,9 +72,9 @@ The send-back and reopen resets are done by a non-assignee. They do not contradi
 
 [WO table; V-C `constants/index.ts:93-101`]
 
-**BR-21 Past-due floor.** Once past due, a task is at least L1 at the due time, L2 at due + 24 h and L3 at due + 72 h, whatever updates are posted, until it closes or its due date moves. [WO; AC-2; V-C `engine/escalation.ts:39-42`]
+**BR-21 Past-due floor.** Once past due, a task is at least L1 at the due time, L2 at due + 24 h and L3 at due + 72 h, whatever updates are posted, until it closes or its due date moves. [WO; AC-2; V-C `engine/escalation.ts:39-42`] **Changed 2026-11-12 (ADR-0014, D-140, D-146):** L1 stays at the due time; L2 and L3 are fixed times stored on the task (due + the vertical policy's delay for its priority), set when it is assigned and re-set when its due time, priority, assignee, vertical or status (assigned, reopened) changes. A policy change moves them only through "Apply to open tasks". The shipped delays are +24 h/+72 h for every priority, so AC-2 holds until the D-152 values are entered. [`shared/policy.ts`, `services/tasks.ts` `stampMilestones`]
 
-**BR-22 Highest rule wins.** The level is max(silence level, past-due level). The reason is `overdue` when the past-due level is at least the silence level, otherwise `silence`. [WO; V-C `engine/escalation.ts:44-45`]
+**BR-22 Highest rule wins.** The level is max(silence level, past-due level). The reason is `overdue` when the past-due level is at least the silence level, otherwise `silence`. [WO; V-C `engine/escalation.ts:44-45`] **ADR-0014 (2026-11-12):** the past-due level is read from the task's stored milestones (BR-21); silence and deadline are computed independently and still share one level and one delivery, so no level fires twice (D-145). Escalation rows also record `accountable` (`assignee`, or `reviewer` when the work was handed in on time and awaits review).
 
 **BR-23 L0 is silence-only.** L0 applies only while the silence level is ≥ 0. L1–L3 apply whenever the task's level is at or above them. [V-C `engine/escalation.ts:72-74`; V-S `engine/levels.ts:71-73`]
 
@@ -88,11 +88,11 @@ The send-back and reopen resets are done by a non-assignee. They do not contradi
 
 **BR-28 Repeat alerts.** The top active level re-alerts its "to" recipients once per window (`windowsHours[priority]`), unless the task is snoozed. [V-C `core.ts:190-204`] On the server the interval is `repeatAfterWindows × window`, where 0 disables repeats [V-S `domain.ts:40-41`, `engine/engine.ts:26-31`]. The default of 1 gives the same behaviour. Copied people do not get repeats. [V-C `core.ts:203`; V-S `engine.ts:165-168`]
 
-**BR-29 Per-entity rules.** Windows, multiples, offsets, quiet hours, D7 and snooze can be overridden per entity. A task uses its entity's override, or else the default. Every change is logged with before and after values. [WO "per entity without code changes; every change is logged"; D-7; V-S `services/rules.ts:36-38, 68-83`]
+**BR-29 Per-entity rules.** Windows, multiples, offsets, quiet hours, D7 and snooze can be overridden per entity. A task uses its entity's override, or else the default. Every change is logged with before and after values. [WO "per entity without code changes; every change is logged"; D-7; V-S `services/rules.ts:36-38, 68-83`] **Changed 2026-11-12 (ADR-0014, D-141, D-142, D-150):** a vertical stores only the fields it changed, from windows, multiples, deadline delays, reviewer deadline and extra recipients; every other value is inherited from the global policy field by field. Quiet hours, D7, snooze, repeats, blocked alerts and due-soon are organization-wide. The vertical's GM (`entities.head_id`) edits their own vertical; the CoS edits all. Each save bumps a version. See [ADMINISTRATION-FRD POL-04](features/ADMINISTRATION-FRD.md).
 
-**BR-30 Rule validation.** Each window is between 1 and 720 h. Multiples are > 0 and strictly increasing. Past-due offsets are ≥ 0 and strictly increasing. The acknowledgement snooze is 1–72 h. [V-C `services/api/admin.ts:230-235`] Saving re-evaluates every open task. [V-C `admin.ts:246`]
+**BR-30 Rule validation.** Each window is between 1 and 720 h. Multiples are > 0 and strictly increasing. Past-due offsets are ≥ 0 and strictly increasing. The acknowledgement snooze is 1–72 h. [V-C `services/api/admin.ts:230-235`] Saving re-evaluates every open task. [V-C `admin.ts:246`] **ADR-0014:** deadline delays are whole minutes, L2 ≥ 5 min after due, L3 > L2, ≤ 30 days; the reviewer deadline is 5 min–7 days; at most 10 extra recipients per level. Saving no longer moves open tasks' L2/L3 times (D-146).
 
-**BR-31 Due-soon and overdue notices.** A `due_soon` notice goes to the assignee `dueSoonHours` (default 24) before the due time. An `overdue` notice goes to the assignee and the giver at the due time. Each fires once per due date. [V-C `core.ts:205-213`, `constants/index.ts:98`]
+**BR-31 Due-soon and overdue notices.** A `due_soon` notice goes to the assignee `dueSoonHours` (default 24) before the due time. An `overdue` notice goes to the assignee and the giver at the due time. Each fires once per due date. [V-C `core.ts:205-213`, `constants/index.ts:98`] **Changed 2026-11-12 (ADR-0014, D-143, D-144):** `due_soon` is sent only when the task was assigned before that moment (long tasks). There is no separate `overdue` notice: L1 at the due time copies the assignee and the giver. New: a 10-minute pre-deadline warning to the assignee (not after submission, not when assigned inside the 10 minutes) and a start notice 10 minutes before a scheduled start. Both 10-minute values are system constants. See [ESCALATION-FRD ESC-07, ESC-10](features/ESCALATION-FRD.md).
 
 ## 4. Routing
 
@@ -137,7 +137,7 @@ The send-back and reopen resets are done by a non-assignee. They do not contradi
 
 **BR-52 Window.** Quiet hours run 21:00–08:00 in the **recipient's** time zone and can be switched off. [WO, WO-D4; V-C `constants/index.ts:99`] If start equals end, there are no quiet hours. [V-C `engine/escalation.ts:89`]
 
-**BR-53 What is held.** L0 and L1 email and WhatsApp deliveries are held, including copies and repeats. [WO; V-C `services/channels.ts:101-102`; V-S `notify/messages.ts:79, 91`] L2 and L3 always go out. [WO] In-app is never held. [V-C `channels.ts:100`; V-S `notify/notify.ts:44`] Blocked alerts: see BR-06 and D-23 (decided).
+**BR-53 What is held.** L0 and L1 email and WhatsApp deliveries are held, including copies and repeats. [WO; V-C `services/channels.ts:101-102`; V-S `notify/messages.ts:79, 91`] L2 and L3 always go out. [WO] In-app is never held. [V-C `channels.ts:100`; V-S `notify/notify.ts:44`] Blocked alerts: see BR-06 and D-23 (decided). **Changed 2026-11-12 (D-147):** a Critical task's L1 (and its repeats) is never held.
 
 **BR-54 Release.** A held delivery is released when quiet hours end in the recipient's zone. [V-C `channels.ts:58-64`, `core.ts:255`; V-S `engine/levels.ts:91-97`, `notify/notify.ts:36`]
 
@@ -159,7 +159,7 @@ The send-back and reopen resets are done by a non-assignee. They do not contradi
 
 **BR-63 Effects.** An assignment record (from, to, by, reason) is created. The reassigner becomes the giver. The acknowledgement and snooze are cleared. The clock restarts. The team follows the new assignee. Both people are notified (the new assignee through the mandatory `reassignment` type). The change is audited. [WO FR-6; V-C `tasks.ts:357-368`, `core.ts:129-135`]
 
-**BR-64 Escalations on reassignment.** Past-due levels still apply after reassignment. [V-C `tasks.ts:363` comment] The server clears every active event and re-fires the applicable levels against the new assignee's chain [V-S `services/tasks.ts:241-246`]. The client keeps existing events, so the old chain stays the recipients [V-C `core.ts:154-162`]. **Decided (D-30):** clear and re-fire to the new assignee's chain.
+**BR-64 Escalations on reassignment.** Past-due levels still apply after reassignment. [V-C `tasks.ts:363` comment] The server clears every active event and re-fires the applicable levels against the new assignee's chain [V-S `services/tasks.ts:241-246`]. The client keeps existing events, so the old chain stays the recipients [V-C `core.ts:154-162`]. **Decided (D-30):** clear and re-fire to the new assignee's chain. **Added 2026-11-12 (D-148):** reassigning a task that is past due or due within 10 minutes needs a new due time, or 422 `dueDate` "This task is past due or due within 10 minutes: set a new due time for the new assignee." The new due time is logged as a `due_change` with the reassignment, and the milestones are re-stamped.
 
 ## 9. Review
 
@@ -224,3 +224,11 @@ The send-back and reopen resets are done by a non-assignee. They do not contradi
 **BR-97 Walks are loop-safe.** Ancestor walks stop when they meet a person already visited, so a corrupt tree cannot hang routing or scope checks. [V-C `permissions.ts:42-54`]
 
 **BR-98 Org changes re-route.** Changing a manager or team re-evaluates escalation for the affected tasks, so new events route along the new tree. [PRD C-7, ORG-02]
+
+## ADR-0015 rules (2026-11-13)
+- **BR-ATT-1:** only a vertical's GM marks its members' attendance; the CoS marks the Founder's Office. GMs, the CoS and the CEO have none. Today and past days only (D-156, D-161, D-163).
+- **BR-ATT-2:** an unmarked day displays as absent and never changes escalation (D-157).
+- **BR-ATT-3:** while marked away, non-Critical silence pauses. Critical silence and every deadline continue. A mark counts only from when it is saved (D-158, D-164).
+- **BR-WT-1:** non-Critical silence and L2/L3 deadline steps count the vertical's working time; Critical counts clock time (D-160).
+- **BR-WT-2:** a vertical's working-time change reaches open tasks' deadlines only through "Apply to open tasks" (D-165).
+- **BR-GM-1:** a GM manages people and departments of their own vertical only, with roles staff/lead/manager. CoS and CEO roles, the GM post and vertical lifecycle stay with the CoS (D-162).

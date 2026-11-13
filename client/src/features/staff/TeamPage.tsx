@@ -31,12 +31,12 @@ export function TeamPage() {
         <Card title="Workload" sub="Current open tasks per person (not historical performance).">
           <BarList label="Open tasks per person" data={d.workload.map((w) => ({ label: w.name, value: w.open, tone: w.overdue ? 'tone-danger-bg' : 'series-1', hint: `${w.overdue} overdue, ${w.escalated} escalated` }))} />
         </Card>
-        <Card title="Teams in scope">
+        <Card title="Departments in scope">
           <table className="table compact">
-            <caption className="sr-only">Teams</caption>
+            <caption className="sr-only">Departments</caption>
             <thead>
               <tr>
-                <th>Team</th>
+                <th>Department</th>
                 <th className="right">Open</th>
                 <th className="right">Overdue</th>
                 <th className="right">Escalated</th>
@@ -46,7 +46,7 @@ export function TeamPage() {
             <tbody>
               {d.teams.map((t) => (
                 <tr key={t.id}>
-                  <td data-label="Team">
+                  <td data-label="Department">
                     <Link to={`/tasks/team?team=${t.id}`}>{t.name}</Link>
                   </td>
                   <td data-label="Open" className="right">{t.open}</td>

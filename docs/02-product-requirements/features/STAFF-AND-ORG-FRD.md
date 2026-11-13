@@ -102,7 +102,7 @@
 
 | Field | Rule | 422 message |
 |---|---|---|
-| `name` | ≥ 2 words after trim | "Enter a first and last name." |
+| `name` | non-empty after trim; one word is enough (D-136, single-name people) | "Enter the person's name." |
 | `name` | ≤ 120 chars | [V-S `people.ts:55`] |
 | `email` | `^[^\s@]+@[^\s@]+\.[^\s@]+$` | "Enter a valid email address." |
 | `email` | unique, case-insensitive | "Another account already uses this email." |
@@ -348,5 +348,56 @@
 - **Who reports to whom (D-130, automatic, no override):** a general manager → the Chief of Staff; a department lead → the vertical's general manager, else the CoS; anyone else → their department lead, else the general manager, else the CoS. The CoS and CEO are not placed. "The CoS" = the first active CoS, else the CEO (`seniorOf`).
 - **When lines move:** only for the people a change affects: the edited, created, moved or deactivated person and their direct reports; a department's members when its lead changes; a vertical's people when its general manager changes. Each move is audited as `staff.manager_changed` `{automatic: true}`.
 - **Visibility:** unchanged rule (the reporting line). With the automatic lines, a general manager's line covers the whole vertical.
-- **Management (D-131):** `/admin/verticals` for manage_staff: add a vertical (code, name, general manager), rename it, change its GM (the GM moves into it), archive it (409 while active people remain; its departments are archived with it); add, rename or archive departments and set their lead (the lead joins the department). Nothing is deleted.
+- **Management (D-131):** `/admin/verticals` for manage_staff: add a vertical (code, name, general manager), rename it, change its GM (the GM moves into it), archive it (409 while active people remain; its departments are archived with it); add, rename or archive departments and set their lead (the lead joins the department, unless they already lead one in this vertical: D-137). Nothing is deleted.
+- **Several departments per lead (D-137):** a lead may run any number of departments in their own vertical; they keep one home department (one they lead). A lead of a department in another vertical is refused ("A lead can run several departments only within one vertical."). Losing or archiving the home moves them to another department they lead; moving them out of their departments, to another vertical, or removing the Team Lead role leaves them all. The lead picker shows "also leads …" and disables leads of another vertical.
 - **Tests:** `permissions.test.ts` "ADR-0011 / D-130"; `api.test.ts` "Verticals and departments (ADR-0011…)" plus the rewritten STAFF-02 / ORG-02 tests.
+
+## ADR-0015: attendance, vertical working time, GM-run verticals (owner, 2026-11-13; built, uncommitted)
+
+Decisions D-156…D-165, [ADR-0015](../../03-architecture/decisions/ADR-0015.md). Design: [2026-11-13-attendance-and-vertical-time-design.md](../../superpowers/specs/2026-11-13-attendance-and-vertical-time-design.md).
+
+### ATT-01 Mark attendance (GM)
+- **Statuses:** present, absent, half day (an away from–to time), leave. A cleared day is stored as `unmarked`; rows are never deleted.
+- **Who marks:** only the person's vertical GM. The CoS marks the Founder's Office. GMs, the CoS and the CEO have no attendance.
+- **When:** today and past days only, in the vertical's zone. A range covers the person's working days; a single day is written as asked.
+- **Audit:** every request writes one `attendance.marked` row.
+- **API:**
+  - `PUT /api/attendance {userIds, from, to, status, half?}` returns `{updated}`. `half`: `first` = away morning, `second` = away afternoon, split at lunch (the middle of the vertical's working hours, D-166). Real dates only (D-168). Away notices are queued in the same transaction (D-167).
+    - Another vertical: 404.
+    - A GM, the CoS or the CEO: 422 `userIds`.
+    - A future day: 422 `day`.
+    - A half day without `half`: 422 `half`.
+  - `GET /api/attendance?from&to&teamId&userId&status` returns `{today, people, days}`. Unmarked days come back as `unmarked`.
+- **AC-1:** unmarked days show as absent (dashed) and never change escalation (D-157).
+- **AC-2:** a mark affects escalation only from the moment it is saved (D-164).
+
+### ATT-02 My attendance
+- `GET /api/attendance/me?month=YYYY-MM` returns the caller's own month. 404 for people without attendance.
+- `/my-attendance` shows a read-only month calendar.
+- The sidebar shows it only when `/api/me` says `hasAttendance`.
+
+### ATT-03 Away and escalation
+- **While marked away** (absent or leave for the whole day, a half day for its range):
+  - non-Critical silence pauses;
+  - Critical silence and all deadlines run as usual.
+- **Away notice:** when someone is marked away today, each open task due between now and the end of the away window gets one notice (event `away_tasks`, the due-soon preference). It goes to the assignee, their GM and the task giver, once per task (`job_runs`).
+- **Task page:** a tag "Assignee on leave", "absent today" or "away until HH:MM".
+
+### ORG-03 Vertical working time
+- `PUT /api/entities/:id/worktime {timeZone, quietHours, workDays, workStart, workEnd}`, for the vertical's GM or the CoS. Each field may be `null` (the organization default). Audited as `vertical.worktime_changed`.
+- **Members follow the vertical** through the directory: zone, quiet hours and the work schedule. A vertical with no zone set keeps each person's stored zone and quiet hours.
+- **Open tasks** keep their deadline times until "Apply to open tasks" (D-165).
+- **Screens:** the Verticals page gets a "Working time" dialog. The person form no longer edits zone or quiet hours.
+
+### STAFF-06 GM manages their vertical (D-162)
+- **What a GM may do, in their own vertical only:**
+  - add, edit, deactivate and reset people;
+  - set roles among staff, lead and manager;
+  - add, rename and archive departments;
+  - see their people's contact details.
+- **Refused:**
+  - other verticals and the Founder's Office: 404;
+  - the CoS or CEO role, renaming a vertical, changing its GM, creating or archiving verticals: 403.
+- **Screens:** Staff, Verticals and Attendance appear in the GM's sidebar.
+
+Tests: TC-ATT-*, TC-ORG-03-*, TC-STAFF-06-* (TEST_CASE_INVENTORY), e2e `attendance.spec.ts`. Last run: `npm test` 371/371, `npm run e2e` 5/5, typecheck 0 (2026-11-13).
